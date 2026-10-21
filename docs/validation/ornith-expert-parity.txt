@@ -1,0 +1,46 @@
+types 19/19/10
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+GPU gate relative L2 5.3618381e-08 max 9.5367432e-07
+GPU up relative L2 5.3618381e-08 max 9.5367432e-07
+GPU down relative L2 3.1971046e-07 max 5.9604645e-07
+types 11/11/11
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+GPU gate relative L2 5.4624947e-08 max 9.5367432e-07
+GPU up relative L2 5.4624947e-08 max 9.5367432e-07
+GPU down relative L2 3.2066448e-07 max 3.5762787e-07
+types 12/13/13
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+GPU gate relative L2 5.2861745e-08 max 9.5367432e-07
+GPU up relative L2 5.3809686e-08 max 9.5367432e-07
+GPU down relative L2 3.9739006e-07 max 3.5762787e-07
+types 18/18/22
+CPU pool token 0 relative L2 6.7530035e-07 max 7.1525574e-07
+CPU pool token 1 relative L2 6.7530035e-07 max 7.1525574e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+GPU gate relative L2 5.1864322e-08 max 9.5367432e-07
+GPU up relative L2 5.1864322e-08 max 9.5367432e-07
+GPU down relative L2 2.8629304e-07 max 4.1723251e-07
+types 21/21/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+GPU gate relative L2 5.1925438e-08 max 9.5367432e-07
+GPU up relative L2 5.1925438e-08 max 9.5367432e-07
+GPU down relative L2 3.1700486e-07 max 5.2154064e-07
+Ornith expert parity passed

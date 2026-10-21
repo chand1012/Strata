@@ -852,7 +852,7 @@ struct Layer {
                                 // (hybrid mode: n_slots slots, see place_experts)
     // the GGUF's expert tensors (the mapped file stays open): place_experts builds the blobs from them
     const uint8_t *src_g = nullptr, *src_u = nullptr, *src_d = nullptr;
-    size_t src_gsz = 0, src_dsz = 0;
+    size_t src_gsz = 0, src_usz = 0, src_dsz = 0;
     uint8_t* hblobs = nullptr;  // hybrid mode: every expert's blob in host memory, `stride` apart
     int n_slots = 0;            // hybrid mode: the experts resident in VRAM
 };
@@ -966,7 +966,13 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         return false;
     }
     size_t checked = 0;
-    if (!strata::core::check_gguf_layout(gm, m.g, err, &checked)) return false;
+    const char* ornith_env = std::getenv("STRATA_ORNITH");
+    const bool ornith = ornith_env && std::strcmp(ornith_env, "1") == 0;
+    if (ornith && (m.g.n_embd != 3072 || m.g.n_ff != 1024 || m.g.n_expert != 256)) {
+        err = "STRATA_ORNITH=1 requires Ornith's 3072/1024/256 expert geometry";
+        return false;
+    }
+    if (!strata::core::check_gguf_layout(gm, m.g, err, &checked, ornith)) return false;
     const auto& g = m.g;
     if (g.head_dim != 256 || g.ssm_state_size != 128 || g.ssm_d_conv != 4 || g.n_expert > 512 || m.top_k > 15) {
         err = "a geometry this driver's kernels do not take (head 256, state 128, conv 4, <= 512 experts, top-k <= 15)";
@@ -1067,16 +1073,26 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         const strata::TensorInfo* tg = find(L(l, "ffn_gate_exps.weight"), sg);
         const strata::TensorInfo* tu = find(L(l, "ffn_up_exps.weight"), su);
         const strata::TensorInfo* td = find(L(l, "ffn_down_exps.weight"), sd);
-        if (tg->type != tu->type) {
+        if (!ornith && tg->type != tu->type) {
             err = L(l, "ffn_gate_exps / ffn_up_exps differ in type");
             return false;
         }
-        if (!K::native_expert_supported((int) tg->type, (int) td->type, g.n_embd, g.n_ff)) {
+        const auto compat_type = [](int t) { return t == 2 || t == 8 || t == 10 || t == 11 || t == 12 ||
+            t == 13 || t == 16 || t == 17 || t == 18 || t == 19 || t == 20 || t == 21 || t == 22 || t == 23 || t == 29; };
+        if (ornith ? !(compat_type(tg->type) && compat_type(tu->type) && compat_type(td->type)) :
+            !K::native_expert_supported((int) tg->type, (int) td->type, g.n_embd, g.n_ff)) {
             err = L(l, "experts are ") + tg->type_name() + "/" + td->type_name() + ", which the native expert kernels " +
                   "do not take (build with -DSTRATA_Q6K_EXPERTS=ON for Q6_K)";
             return false;
         }
         y.L = K::native_expert_layout((int) tg->type, (int) td->type, g.n_embd, g.n_ff);
+        if (ornith) {
+            y.L.compatibility = true;
+            y.L.u_type = (int) tu->type;
+            y.L.u_row = row_bytes((int) tu->type, g.n_embd);
+            y.L.down_off = y.L.up_off + (size_t) g.n_ff * y.L.u_row;
+            y.L.bytes = y.L.down_off + (size_t) g.n_embd * y.L.d_row;
+        }
         const size_t gsz = (size_t) g.n_ff * y.L.gu_row, dsz = (size_t) g.n_embd * y.L.d_row;
         // a stride in whole blocks of both parts' types (MMQ steps over the experts by blocks), 16-byte aligned
         const size_t al = lcm_sz(lcm_sz(block_bytes(y.L.gu_type), block_bytes(y.L.d_type)), 16);
@@ -1085,6 +1101,7 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         y.src_u = gm.shard(su).tensor_data(*tu);
         y.src_d = gm.shard(sd).tensor_data(*td);
         y.src_gsz = gsz;
+        y.src_usz = (size_t) g.n_ff * (ornith ? y.L.u_row : y.L.gu_row);
         y.src_dsz = dsz;
     }
     if (m.has_mtp) {
@@ -1117,7 +1134,7 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
 /// Expert e of layer L as its native blob [gate | up | down] (L.L.bytes) at dst (host memory).
 void expert_blob(const Layer& L, int64_t e, uint8_t* dst) {
     std::memcpy(dst, L.src_g + (size_t) e * L.src_gsz, L.src_gsz);
-    std::memcpy(dst + L.L.up_off, L.src_u + (size_t) e * L.src_gsz, L.src_gsz);
+    std::memcpy(dst + L.L.up_off, L.src_u + (size_t) e * L.src_usz, L.src_usz);
     std::memcpy(dst + L.L.down_off, L.src_d + (size_t) e * L.src_dsz, L.src_dsz);
 }
 
@@ -1372,7 +1389,7 @@ struct Engine {
         q16 = dalloc_t<__half>(T * g.n_head * g.head_dim);
         use_mmq = MMQ::built() && std::getenv("STRATA_Q36_NO_MMQ") == nullptr;
         auto mmq_ok = [&](const Layer& L) {
-            return MMQ::supported(L.L.gu_type) && MMQ::supported(L.L.d_type) && MMQ::fits(L.L.gu_type, 2 * g.n_ff) &&
+            return !L.L.compatibility && MMQ::supported(L.L.gu_type) && MMQ::supported(L.L.d_type) && MMQ::fits(L.L.gu_type, 2 * g.n_ff) &&
                    MMQ::fits(L.L.d_type, g.n_embd);
         };
         for (const Layer& L : m->layers) use_mmq = use_mmq && mmq_ok(L);
@@ -2963,7 +2980,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         H.score.assign((size_t) ne, 0.0);
         CK(cudaMalloc(&H.slot_of_d, (size_t) ne * 4));
         CK(cudaMemcpy(H.slot_of_d, H.slot_of.data(), (size_t) ne * 4, cudaMemcpyHostToDevice));
-        if (!C::native_fmt(L.L.gu_type, L.L.d_type, g.n_embd, g.n_ff, H.fmt, err)) return false;
+        if (!C::native_fmt_mixed(L.L.gu_type, L.L.u_type < 0 ? L.L.gu_type : L.L.u_type, L.L.d_type, g.n_embd, g.n_ff, H.fmt, err)) return false;
         if (H.fmt.up_off != L.L.up_off || H.fmt.down_off != L.L.down_off || H.fmt.bytes != L.L.bytes) {
             err = "the CPU and GPU expert layouts differ";
             return false;

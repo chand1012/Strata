@@ -238,7 +238,7 @@ inline bool layout_table_complete(const ModelGeometry& g) { return g.family == s
 
 /// Checks the model `m` (all shards) against the layout table of `g`.  `checked` counts the tensors found.
 inline bool check_gguf_layout(const strata::GgufModel& m, const ModelGeometry& g, std::string& err,
-                              size_t* checked = nullptr) {
+                              size_t* checked = nullptr, bool singleton_shared_gate = false) {
     std::set<std::string> named;
     size_t n = 0;
     auto check = [&](const std::string& name, const std::vector<int64_t>& shape) {
@@ -251,6 +251,11 @@ inline bool check_gguf_layout(const strata::GgufModel& m, const ModelGeometry& g
         }
         bool same = t->shape.size() == shape.size();
         for (size_t i = 0; same && i < shape.size(); ++i) same = t->shape[i] == (uint64_t) shape[i];
+        // Unsloth exports this vector as a one-column matrix. No other tensor may change rank.
+        if (singleton_shared_gate && name.size() >= 25 &&
+            name.compare(name.size() - 25, 25, "ffn_gate_inp_shexp.weight") == 0 &&
+            shape.size() == 1 && t->shape.size() == 2 &&
+            t->shape[0] == (uint64_t) shape[0] && t->shape[1] == 1) same = true;
         if (!same) {
             std::string got, want;
             for (uint64_t d : t->shape) got += (got.empty() ? "" : ", ") + std::to_string(d);

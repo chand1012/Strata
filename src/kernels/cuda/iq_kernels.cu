@@ -2956,6 +2956,48 @@ __device__ void dq_tq(const void* vx, int64_t ibs, dst_t* yy, int tid) {
     }
 }
 
+// From pinned ggml dequantize.cuh (MIT); Q2_K folds 64 lanes onto 32.
+template<typename dst_t>
+__device__ void dq_q2_k(const void * vx, const int64_t ib, dst_t * yy, const int lane) {
+    const block_q2_K * x = (const block_q2_K *) vx;
+
+    for (int tid = lane; tid < 64; tid += 32) {
+    const int64_t n   = tid/32;
+    const int64_t l   = tid - 32*n;
+    const int64_t is  = 8*n + l/16;
+
+    const uint8_t q = x[ib].qs[32*n + l];
+    dst_t * y = yy + 128*n;
+
+    float dall = __low2half(x[ib].dm);
+    float dmin = __high2half(x[ib].dm);
+    y[l+ 0] = cvt<dst_t>(dall * (x[ib].scales[is+0] & 0xF) * ((q >> 0) & 3) - dmin * (x[ib].scales[is+0] >> 4));
+    y[l+32] = cvt<dst_t>(dall * (x[ib].scales[is+2] & 0xF) * ((q >> 2) & 3) - dmin * (x[ib].scales[is+2] >> 4));
+    y[l+64] = cvt<dst_t>(dall * (x[ib].scales[is+4] & 0xF) * ((q >> 4) & 3) - dmin * (x[ib].scales[is+4] >> 4));
+    y[l+96] = cvt<dst_t>(dall * (x[ib].scales[is+6] & 0xF) * ((q >> 6) & 3) - dmin * (x[ib].scales[is+6] >> 4));
+    }
+}
+
+template<typename dst_t>
+__device__ void dq_iq1_s(const void * vx, const int64_t ibs, dst_t * yy, const int tid) {
+
+    const block_iq1_s * x = (const block_iq1_s  *) vx;
+
+    const int64_t il = tid/8; // 0...3
+    const int64_t ib = tid%8; // 0...7
+    dst_t * y = yy + 32*ib + 8*il;
+    const float delta = x[ibs].qh[ib] & 0x8000 ? -1 - IQ1S_DELTA : -1 + IQ1S_DELTA;
+    const float d = (float)x[ibs].d * (2*((x[ibs].qh[ib] >> 12) & 7) + 1);
+    uint32_t grid32[2]; const int8_t * q = (const int8_t *)grid32;
+    grid32[0] = iq1s_grid_gpu[x[ibs].qs[4*ib+il] | (((x[ibs].qh[ib] >> 3*il) & 7) << 8)];
+    grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
+    grid32[0] &= 0x0f0f0f0f;
+    for (int j = 0; j < 8; ++j) {
+        y[j] = cvt<dst_t>(d * (q[j] + delta));
+    }
+}
+
+
 // Every type below must also be in is_iq() (BF16: embed_type_supported): the host entry points refuse the others,
 // so the default is unreachable.
 template<typename dst_t>
@@ -2969,6 +3011,8 @@ __device__ __forceinline__ void dq_dispatch(int ty, const void* vx, int64_t ibs,
         case 22: dq_iq2_s(vx, ibs, y, tid); break;
         case 29: dq_iq1_m(vx, ibs, y, tid); break;
         case 23: dq_iq4_xs(vx, ibs, y, tid); break;
+        case 10: dq_q2_k(vx, ibs, y, tid); break;
+        case 19: dq_iq1_s(vx, ibs, y, tid); break;
         case 11: dq_q3_k(vx, ibs, y, tid); break;
         case 42: dq_q2_0(vx, ibs, y, tid); break;
         case 12: dq_q4_k(vx, ibs, y, tid); break;
@@ -2985,6 +3029,34 @@ __device__ __forceinline__ void dq_dispatch(int ty, const void* vx, int64_t ibs,
         case 145: dq_tq<145>(vx, ibs, y, tid); break;
         case 146: dq_tq<146>(vx, ibs, y, tid); break;
         default: break;
+    }
+}
+
+// Correctness-first Ornith path. One warp owns a projection row. Only a 256-value
+// block is expanded in shared memory; the resident expert blobs stay quantized.
+// Gate, up and down have independent formats, strides and offsets.
+__global__ void ornith_projection_kernel(int type, size_t offset, size_t row_bytes,
+        int n_in, int n_out, bool down, const unsigned long long* ptr,
+        const int32_t* start, const int32_t* groups, const int32_t* dst,
+        const int32_t* tok, const block_q8_1* x, float* out) {
+    const int g = blockIdx.y, r = blockIdx.x, lane = threadIdx.x;
+    if (g >= *groups) return;
+    const uint8_t* w = (const uint8_t*) ptr[g] + offset + (size_t) r * row_bytes;
+    __shared__ float block[256];
+    for (int e = start[g]; e < start[g + 1]; ++e) {
+        const block_q8_1* a = x + (size_t) (down ? e : tok[e]) * (n_in / 32);
+        float sum = 0;
+        for (int b = 0; b < n_in / 256; ++b) {
+            dq_dispatch<float>(type, w, b, block, lane);
+            __syncthreads();
+            for (int j = lane; j < 256; j += 32) {
+                const block_q8_1& q = a[b * 8 + j / 32];
+                sum += block[j] * ((float) __low2half(q.ds) * (float) q.qs[j % 32]);
+            }
+            __syncthreads();
+        }
+        for (int d = 16; d > 0; d >>= 1) sum += __shfl_xor_sync(0xffffffffu, sum, d);
+        if (lane == 0) out[(size_t) (down ? dst[e] : e) * n_out + r] = sum;
     }
 }
 
@@ -3023,7 +3095,7 @@ __global__ void dequant_gu_kernel(int ty, const void* __restrict__ gate, const v
 
 // the types dq_dispatch dequantizes
 bool is_iq(int t) {
-    return t == 16 || t == 17 || t == 18 || t == 20 || t == 21 || t == 22 || t == 23 || t == 29 || t == 42 || t == 11 ||
+    return t == 16 || t == 17 || t == 18 || t == 20 || t == 21 || t == 22 || t == 23 || t == 29 || t == 42 || t == 11 || t == 10 || t == 19 ||
 #ifdef STRATA_Q6K_EXPERTS
            t == 12 || t == 13 || t == 14 || t == 7 || t == 6 || t == 2 || t == 3 || t == 8 || t == 40 || t == 144 || t == 145 || t == 146;
 #else
@@ -3905,6 +3977,8 @@ size_t iq_row_bytes(int t, int64_t n) noexcept {
         case 22: return (size_t) (n / 256) * sizeof(block_iq2_s);
         case 29: return (size_t) (n / 256) * sizeof(block_iq1_m);
         case 23: return (size_t) (n / 256) * sizeof(block_iq4_xs);
+        case 10: return (size_t) (n / 256) * sizeof(block_q2_K);
+        case 19: return (size_t) (n / 256) * sizeof(block_iq1_s);
         case 11: return (size_t) (n / 256) * sizeof(block_q3_K);
         case 42: return (size_t) (n / 64) * sizeof(block_q2_0);
         case 12: return (size_t) (n / 256) * sizeof(block_q4_K);
@@ -4778,6 +4852,20 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     float* h = (float*) ((uint8_t*) scratch + 2 * fa);
     block_q8_1* hq = (block_q8_1*) ((uint8_t*) scratch + 3 * fa);
     const auto* X = (const block_q8_1*) x_q8_1;
+    if (L.compatibility) {
+        const dim3 gu((unsigned) L.n_ff, (unsigned) cap_groups);
+        ornith_projection_kernel<<<gu, 32, 0, s>>>(L.gu_type, 0, L.gu_row, L.n_embd, L.n_ff, false,
+            grp_ptr, grp_start, n_groups, ent_dst, ent_tok, X, gate);
+        ornith_projection_kernel<<<gu, 32, 0, s>>>(L.u_type, L.up_off, L.u_row, L.n_embd, L.n_ff, false,
+            grp_ptr, grp_start, n_groups, ent_dst, ent_tok, X, up);
+        swiglu_q8_1_entries_kernel<<<(unsigned) ((cap_entries * L.n_ff + 255) / 256), 256, 0, s>>>(
+            gate, up, grp_start, n_groups, (int) L.n_ff, hq);
+        const dim3 dn((unsigned) L.n_embd, (unsigned) cap_groups);
+        ornith_projection_kernel<<<dn, 32, 0, s>>>(L.d_type, L.down_off, L.d_row, L.n_ff, L.n_embd, true,
+            grp_ptr, grp_start, n_groups, ent_dst, ent_tok, hq, out);
+        check("native_expert_grouped (Ornith compatibility)");
+        return;
+    }
     static const bool v2 = [] { const char* v = std::getenv("STRATA_EXPERT_V2"); return v && v[0] == '1'; }();
     if (v2 && L.gu_type == 21 && L.d_type == 20 && L.n_embd == 2560 && L.n_ff == 640) {   // S26: see s26_gu_l_kernel
         // S26 STRATA_TSUM=1: the sums as one transposed butterfly per warp (s26_tsum.cuh; bitwise the same values)

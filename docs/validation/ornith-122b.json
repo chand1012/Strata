@@ -1,0 +1,466 @@
+{
+  "date": "2026-10-21",
+  "upstream_base": "9de04cd44e927a9a3df6bbc0e94fc1be8b844ba4",
+  "ggml_commit": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+  "hardware": {
+    "gpu": "NVIDIA RTX 3090 Ti, 24576 MiB",
+    "cpu": "Intel Core i7-10700, 8 cores / 16 threads",
+    "host_ram": "64 GB installed, about 61 GiB usable",
+    "driver": "595.91.07"
+  },
+  "build": {
+    "cuda": "13.0.48",
+    "compiler": "GNU 13.3.0",
+    "cuda_architectures": "86",
+    "portable": true,
+    "executable_sha256": "759f728ba493277718004ceae6574a858f53bf7636167996f9cfb7004472c62b"
+  },
+  "memory_limit_bytes": 60129542144,
+  "swap_limit_bytes": 0,
+  "memory_note": "cgroup memory includes file cache; its peak is not the minimum resident RAM requirement",
+  "runtime": {
+    "context": 8192,
+    "prompt_chunk": 32,
+    "mtp_drafts": 0,
+    "pool_workers": 7,
+    "requests_at_once": 1,
+    "environment": {
+      "STRATA_ORNITH": "1"
+    }
+  },
+  "tests_passed": [
+    "ornith_parity",
+    "ornith_layout_test",
+    "pool_tasks_test",
+    "native_grouped_parity",
+    "gguf_reader_test",
+    "gguf_split_test",
+    "gguf_geometry_test"
+  ],
+  "models": {
+    "unsloth": {
+      "idle": [
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "tests": [
+        {
+          "name": "arithmetic",
+          "prompt_tokens": 28,
+          "output_ids": [
+            18,
+            24,
+            16
+          ],
+          "output": "391",
+          "seconds": 1.5275137131102383,
+          "stats": [
+            "DONE 4 28 1389.4 123.9 stop 0 0 0 0 0 0 0 0.0 28 0"
+          ]
+        },
+        {
+          "name": "coding",
+          "prompt_tokens": 31,
+          "output_ids": [
+            727,
+            9057,
+            2007,
+            1590,
+            198,
+            262,
+            460,
+            830,
+            348,
+            830
+          ],
+          "output": "def square(x):\n    return x * x",
+          "seconds": 1.2981814180966467,
+          "stats": [
+            "DONE 11 31 908.2 365.3 stop 0 0 0 0 0 0 0 0.0 31 0"
+          ]
+        },
+        {
+          "name": "prose",
+          "prompt_tokens": 24,
+          "output_ids": [
+            29108,
+            4009,
+            5435,
+            660,
+            7736,
+            314,
+            9155,
+            3000,
+            11,
+            694,
+            948,
+            424,
+            27891,
+            8964,
+            579,
+            16078,
+            11,
+            424,
+            4382,
+            3232,
+            440,
+            6605,
+            33470,
+            321,
+            1100,
+            9872,
+            303,
+            660,
+            17425,
+            13,
+            10382,
+            261,
+            89661,
+            314,
+            3000,
+            2218,
+            4650,
+            6105,
+            321,
+            76990,
+            2218,
+            67872,
+            1691,
+            777,
+            1056,
+            4860,
+            89661,
+            1040,
+            2438,
+            13,
+            8938,
+            6105,
+            3000,
+            1100,
+            9872,
+            3808,
+            279,
+            12515,
+            748,
+            13057,
+            11,
+            1004,
+            6213,
+            42918,
+            279,
+            12515,
+            430,
+            6105,
+            13
+          ],
+          "output": "Sunlight contains all colors of visible light, but when it enters Earth's atmosphere, it collides with gas molecules and scatters in all directions. Shorter wavelengths of light\u2014like blue and violet\u2014scatter much more than longer wavelengths like red. Because blue light scatters across the sky so effectively, our eyes perceive the sky as blue.",
+          "seconds": 4.048325382173061,
+          "stats": [
+            "DONE 70 24 648.6 3395.7 stop 0 0 0 0 0 0 0 0.0 24 0"
+          ]
+        },
+        {
+          "name": "long_prompt",
+          "prompt_tokens": 1160,
+          "output_ids": [
+            44418,
+            4014,
+            12,
+            22,
+            17,
+            19
+          ],
+          "output": "ORNITH-724",
+          "seconds": 39.79618754191324,
+          "stats": [
+            "DONE 7 1160 39471.7 323.4 stop 0 0 0 0 0 0 0 0.0 1160 0"
+          ]
+        }
+      ],
+      "peak_gpu_mib": 23466,
+      "peak_cgroup_memory_bytes": 60129542144,
+      "startup_seconds": 115.10702737304382,
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 166.88314483803697,
+      "model_file": "Ornith-1.5-122B-UD-IQ3_XXS.gguf"
+    },
+    "bartowski": {
+      "idle": [
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "tests": [
+        {
+          "name": "arithmetic",
+          "prompt_tokens": 28,
+          "output_ids": [
+            18,
+            24,
+            16
+          ],
+          "output": "391",
+          "seconds": 1.5366036090999842,
+          "stats": [
+            "DONE 4 28 1414.9 121.2 stop 0 0 0 0 0 0 0 0.0 28 0"
+          ]
+        },
+        {
+          "name": "coding",
+          "prompt_tokens": 31,
+          "output_ids": [
+            727,
+            9057,
+            2007,
+            1590,
+            198,
+            262,
+            460,
+            830,
+            348,
+            830
+          ],
+          "output": "def square(x):\n    return x * x",
+          "seconds": 1.3625030689872801,
+          "stats": [
+            "DONE 11 31 976.0 386.1 stop 0 0 0 0 0 0 0 0.0 31 0"
+          ]
+        },
+        {
+          "name": "prose",
+          "prompt_tokens": 24,
+          "output_ids": [
+            29108,
+            4009,
+            5435,
+            660,
+            7736,
+            11,
+            694,
+            948,
+            424,
+            27891,
+            279,
+            16078,
+            11,
+            424,
+            4382,
+            3232,
+            440,
+            6605,
+            33470,
+            321,
+            1100,
+            9872,
+            303,
+            2086,
+            17425,
+            13,
+            10382,
+            261,
+            89661,
+            314,
+            3000,
+            2218,
+            4650,
+            6105,
+            321,
+            76990,
+            2218,
+            67872,
+            1691,
+            777,
+            1056,
+            4860,
+            89661,
+            1680,
+            430,
+            2438,
+            13,
+            8938,
+            6105,
+            3000,
+            1100,
+            9872,
+            3808,
+            279,
+            12515,
+            303,
+            1396,
+            4944,
+            11,
+            1004,
+            6213,
+            5091,
+            424,
+            494,
+            660,
+            888,
+            11,
+            3154,
+            279,
+            12515,
+            4833,
+            6105,
+            13
+          ],
+          "output": "Sunlight contains all colors, but when it enters the atmosphere, it collides with gas molecules and scatters in different directions. Shorter wavelengths of light\u2014like blue and violet\u2014scatter much more than longer wavelengths such as red. Because blue light scatters across the sky in every direction, our eyes receive it from all over, making the sky appear blue.",
+          "seconds": 4.291615331079811,
+          "stats": [
+            "DONE 74 24 776.4 3514.7 stop 0 0 0 0 0 0 0 0.0 24 0"
+          ]
+        },
+        {
+          "name": "long_prompt",
+          "prompt_tokens": 1160,
+          "output_ids": [
+            44418,
+            4014,
+            12,
+            22,
+            17,
+            19
+          ],
+          "output": "ORNITH-724",
+          "seconds": 34.663146340986714,
+          "stats": [
+            "DONE 7 1160 34328.3 333.9 stop 0 0 0 0 0 0 0 0.0 1160 0"
+          ]
+        }
+      ],
+      "peak_gpu_mib": 23462,
+      "peak_cgroup_memory_bytes": 60129542144,
+      "startup_seconds": 105.76210578298196,
+      "passed": true,
+      "exit_code": 0,
+      "wall_seconds": 153.3931451269891,
+      "model_file": "Ornith-1.5-122B-Q3_K_S-00001-of-00002.gguf"
+    }
+  },
+  "prompts": {
+    "arithmetic": "What is 17 * 23? Reply with only the integer.",
+    "coding": "Write a Python function square(x) that returns x multiplied by itself. Return only the code.",
+    "prose": "Explain in three short sentences why the sky appears blue.",
+    "long_prompt": "The secret key is ORNITH-724.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\nThis paragraph is filler about trees, rivers, mountains, and quiet villages.\n\nWhat was the secret key at the beginning? Reply with only that key."
+  },
+  "prompt_rendering": {
+    "template": "embedded GGUF chat_template",
+    "messages": "one user message per test",
+    "add_generation_prompt": true,
+    "enable_thinking": false,
+    "sampling": "greedy",
+    "stop": "client sends STOP upon im_end"
+  },
+  "not_tested": [
+    "HIP",
+    "SYCL",
+    "vision",
+    "MTP generation",
+    "full 8192-token prompt",
+    "concurrent requests",
+    "full-model logit parity against llama.cpp"
+  ],
+  "api_server": {
+    "idle": "1, 0",
+    "health": {
+      "status": "ok",
+      "max_context": 8192,
+      "model": "ornith-1.5-122b-bartowski-q3-k-s",
+      "images": false,
+      "api_key": false,
+      "image_generation": false,
+      "loaded": true,
+      "service": "strata"
+    },
+    "startup_seconds": 110.02130169491284,
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "ornith-1.5-122b-bartowski-q3-k-s",
+          "object": "model",
+          "status": {
+            "value": "loaded"
+          },
+          "meta": {
+            "n_ctx": 8192
+          },
+          "architecture": {
+            "input_modalities": [
+              "text"
+            ],
+            "output_modalities": [
+              "text"
+            ]
+          }
+        }
+      ]
+    },
+    "response": {
+      "id": "chatcmpl-32282455a1d54367a20c56f9",
+      "object": "chat.completion",
+      "created": 1792553209,
+      "model": "ornith-1.5-122b-bartowski-q3-k-s",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "391"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 28,
+        "completion_tokens": 4,
+        "total_tokens": 32,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 28,
+        "prompt_ms": 1338.4,
+        "prompt_per_token_ms": 47.8,
+        "prompt_per_second": 20.9,
+        "predicted_n": 4,
+        "predicted_ms": 143.6,
+        "predicted_per_token_ms": 35.9,
+        "predicted_per_second": 27.9,
+        "draft_n": 0,
+        "draft_n_accepted": 0
+      }
+    },
+    "passed": true,
+    "wall_seconds": 116.8183029089123,
+    "launch": "serve/server.py --engine strata --config <generated-config> --host 127.0.0.1 --port 18090 --offline"
+  },
+  "setup_integrity_checks": [
+    "valid file accepted",
+    "wrong size rejected",
+    "wrong SHA-256 rejected",
+    "missing file rejected"
+  ]
+}

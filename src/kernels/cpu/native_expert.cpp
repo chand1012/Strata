@@ -61,6 +61,10 @@ bool kq256_supported(int type) noexcept { return type == 12 || type == 7 || type
 
 bool native_fmt(int gu_type, int d_type, int64_t n_embd, int64_t n_ff, NativeFmt& f, std::string& err) {
     init_once();
+    if (n_embd <= 0 || n_ff <= 0 || n_ff > kNativeMaxFF) {
+        err = "native experts: geometry exceeds the pool scratch capacity";
+        return false;
+    }
     // The trellis types (Gyro, ggml types 144-146) are not in a ggml built from upstream (and an upstream ggml indexes its
     // type table by the id, so asking it about 144 reads past the table): their geometry and activation format (Q8_0)
     // are known here, and their rows run on tq_cpu.hpp.
@@ -86,6 +90,8 @@ bool native_fmt(int gu_type, int d_type, int64_t n_embd, int64_t n_ff, NativeFmt
         err = "native experts: expert geometry is not whole blocks";
         return false;
     }
+    f.u_type = -1;
+    f.u_row = 0;
     f.gu_type = gu_type;
     f.d_type = d_type;
     f.gu_act = (int) vdt_g;
@@ -174,6 +180,16 @@ int native_gu_mt_min(int gu_type) {
 
 void native_gu_rows(const NativeFmt& f, const uint8_t* blob, const void* const* act, int nt, float* const* ff,
                     int r0, int r1) {
+    if (f.u_type >= 0 && f.u_type != f.gu_type) {
+        const auto gd = traits(f.gu_type)->vec_dot, ud = traits(f.u_type)->vec_dot;
+        for (int r = r0; r < r1; ++r) for (int t = 0; t < nt; ++t) {
+            float g = 0, u = 0;
+            gd((int) f.n_embd, &g, 0, blob + r * f.gu_row, 0, act[t], 0, 1);
+            ud((int) f.n_embd, &u, 0, blob + f.up_off + r * f.u_row, 0, act[t], 0, 1);
+            ff[t][r] = (g / (1.f + std::exp(-g))) * u;
+        }
+        return;
+    }
     // the multi-token kernels decode the weights once for all tokens: 2.0-2.4x ggml-cpu at three tokens, no faster
     // at one (all are bound by the codebook lookups, ~5 GB/s per core), measured by native_expert_parity.  AVX-512
     // first, then the AVX-2 one (Zen 2/3, Intel 12th-14th gen).  STRATA_NO_IQ512 drops an AVX-512 CPU to the

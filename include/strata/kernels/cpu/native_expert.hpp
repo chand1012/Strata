@@ -13,13 +13,16 @@
 
 namespace strata::kernels::cpu {
 
-/// Bytes of the largest quantized activation any native layer uses (2560 values as Q8_K: 10 x 292).
+/// Bytes of the largest quantized activation any native layer uses (up to 3072 values as Q8_K: 12 x 292).
 inline constexpr size_t kNativeActBytes = 4096;
-/// Bytes of the largest quantized down activation (640 values as Q8_0: 20 x 34, or Q8_K 3 x 292).
-inline constexpr size_t kNativeHBytes = 1024;
+/// Bytes of the largest quantized down activation (1024 values as Q8_K: 4 x 292).
+inline constexpr size_t kNativeHBytes = 1280;
+inline constexpr int kNativeMaxFF = 1024;
 
 /// One layer's native expert geometry.
 struct NativeFmt {
+    int u_type = -1;                   ///< -1: same as gate; otherwise independent up projection
+    size_t u_row = 0;
     int gu_type = -1, d_type = -1;      ///< ggml types of gate/up and of down
     int gu_act = -1, d_act = -1;        ///< their vec_dot_type (the activation formats)
     int64_t n_embd = 0, n_ff = 0;
@@ -46,6 +49,23 @@ constexpr size_t kNvfp4Tail = 16;
 bool native_experts_available() noexcept;
 /// Fills `f` for a layer; false (with a reason) when ggml-cpu has no dot product for a type.
 bool native_fmt(int gu_type, int d_type, int64_t n_embd, int64_t n_ff, NativeFmt& f, std::string& err);
+
+/// Configure independent gate/up types, requiring a common activation format.
+inline bool native_fmt_mixed(int gt, int ut, int dt, int64_t n, int64_t ff, NativeFmt& f, std::string& err) {
+    if (!native_fmt(gt, dt, n, ff, f, err)) return false;
+    if (gt == ut) return true;
+    NativeFmt u;
+    if (!native_fmt(ut, dt, n, ff, u, err)) return false;
+    if (f.gu_act != u.gu_act || f.tail_off || u.tail_off) {
+        err = "native experts: mixed gate/up needs a common activation format and no scale tail";
+        return false;
+    }
+    f.u_type = ut;
+    f.u_row = u.gu_row;
+    f.down_off = f.up_off + (size_t) ff * f.u_row;
+    f.bytes = f.down_off + (size_t) n * f.d_row;
+    return true;
+}
 
 /// x (n_embd floats) -> the gate/up activation (act_bytes), rotated first when the layer is Hadamard-folded.
 void native_quant_act(const NativeFmt& f, const float* x, void* dst);

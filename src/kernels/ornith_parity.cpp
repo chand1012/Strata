@@ -1,0 +1,204 @@
+// Ornith's wider CPU pool, mixed projections, and CUDA compatibility path vs ggml.
+#include "ggml-cpu.h"
+#include "ggml.h"
+#include "strata/artifact/gguf_reader.hpp"
+#include "strata/kernels/cpu/pool.hpp"
+#include "strata/kernels/iq_kernels.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cuda_runtime.h>
+#include <vector>
+namespace K = strata::kernels;
+namespace C = strata::kernels::cpu;
+static void ck(cudaError_t e) {
+    if (e != cudaSuccess) {
+        std::fprintf(stderr, "%s\n", cudaGetErrorString(e));
+        std::exit(2);
+    }
+}
+template <class T> T *dev(size_t n) {
+    T *p;
+    ck(cudaMalloc(&p, n * sizeof(T)));
+    ck(cudaMemset(p, 0, n * sizeof(T)));
+    return p;
+}
+template <class T> void put(T *d, const T *h, size_t n) {
+    ck(cudaMemcpy(d, h, n * sizeof(T), cudaMemcpyHostToDevice));
+}
+template <class T> void get(T *h, const T *d, size_t n) {
+    ck(cudaMemcpy(h, d, n * sizeof(T), cudaMemcpyDeviceToHost));
+}
+static void compare(const char *label, const std::vector<float> &got, const std::vector<float> &ref,
+                    float tol) {
+    double err = 0, norm = 0;
+    float maxerr = 0;
+    for (size_t i = 0; i < got.size(); ++i) {
+        if (!std::isfinite(got[i]))
+            std::exit(3);
+        double d = got[i] - ref[i];
+        err += d * d;
+        norm += (double)ref[i] * ref[i];
+        maxerr = std::max(maxerr, (float)std::abs(d));
+    }
+    double rel = std::sqrt(err / std::max(norm, 1e-30));
+    std::printf("%s relative L2 %.8g max %.8g\n", label, rel, maxerr);
+    if (rel > tol)
+        std::exit(4);
+}
+static std::vector<uint8_t> weights(int type, int n, int rows) {
+    std::vector<float> f((size_t)n * rows), importance(n, 1.f);
+    for (size_t i = 0; i < f.size(); ++i)
+        f[i] = 0.005f * std::sin(float(i) * 0.173f) + 0.004f * std::cos(float(i) * 0.031f);
+    std::vector<uint8_t> q(ggml_row_size((ggml_type)type, n) * rows);
+    ggml_quantize_chunk((ggml_type)type, f.data(), q.data(), 0, rows, n, importance.data());
+    return q;
+}
+// q8_1 wire format: fp16 d, fp16 sum, 32 int8 values.
+static std::vector<float> q8float(const std::vector<uint8_t> &q, int n) {
+    std::vector<float> f(n);
+    for (int i = 0; i < n; ++i) {
+        uint16_t h;
+        std::memcpy(&h, q.data() + (i / 32) * 36, 2);
+        f[i] = ggml_fp16_to_fp32(h) * (int8_t)q[(i / 32) * 36 + 4 + i % 32];
+    }
+    return f;
+}
+static std::vector<float> project(int type, const uint8_t *w, int n, int rows, const std::vector<float> &x) {
+    std::vector<float> y(rows), row(n);
+    size_t rb = ggml_row_size((ggml_type)type, n);
+    for (int r = 0; r < rows; ++r) {
+        ggml_get_type_traits((ggml_type)type)->to_float(w + r * rb, row.data(), n);
+        double s = 0;
+        for (int i = 0; i < n; ++i)
+            s += (double)row[i] * x[i];
+        y[r] = (float)s;
+    }
+    return y;
+}
+int main() {
+    ggml_cpu_init();
+    constexpr int N = 3072, F = 1024;
+    for (auto types :
+         {std::vector<int>{19, 19, 10}, {11, 11, 11}, {12, 13, 13}, {18, 18, 22}, {21, 21, 18}}) {
+        for (int type : types) {
+            int elems, bytes;
+            if (!strata::block_geometry(type, elems, bytes) || elems != ggml_blck_size((ggml_type)type) ||
+                bytes != (int)ggml_type_size((ggml_type)type))
+                return 6;
+        }
+        int gt = types[0], ut = types[1], dt = types[2];
+        std::printf("types %d/%d/%d\n", gt, ut, dt);
+        C::NativeFmt f;
+        std::string err;
+        if (!C::native_fmt_mixed(gt, ut, dt, N, F, f, err)) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        auto g = weights(gt, N, F), u = weights(ut, N, F), d = weights(dt, F, N);
+        std::vector<uint8_t> blob(f.bytes);
+        std::memcpy(blob.data(), g.data(), g.size());
+        std::memcpy(blob.data() + f.up_off, u.data(), u.size());
+        std::memcpy(blob.data() + f.down_off, d.data(), d.size());
+        std::vector<float> x(N);
+        for (int i = 0; i < N; ++i)
+            x[i] = std::sin(float(i) * 0.031f);
+        std::vector<uint8_t> act(C::kNativeActBytes), hq(C::kNativeHBytes);
+        C::native_quant_act(f, x.data(), act.data());
+        std::vector<float> h(F), ref(N), out(N), out2(N);
+        // Independent ggml vec_dot calls, not native_gu_rows, catch mixed offsets/types.
+        for (int r = 0; r < F; ++r) {
+            float a, b;
+            ggml_get_type_traits_cpu((ggml_type)gt)
+                ->vec_dot(N, &a, 0, blob.data() + r * f.gu_row, 0, act.data(), 0, 1);
+            ggml_get_type_traits_cpu((ggml_type)ut)
+                ->vec_dot(N, &b, 0, blob.data() + f.up_off + r * ggml_row_size((ggml_type)ut, N), 0,
+                          act.data(), 0, 1);
+            h[r] = a / (1 + std::exp(-a)) * b;
+        }
+        C::native_quant_h(f, h.data(), hq.data());
+        for (int r = 0; r < N; ++r)
+            ggml_get_type_traits_cpu((ggml_type)dt)
+                ->vec_dot(F, &ref[r], 0, blob.data() + f.down_off + r * f.d_row, 0, hq.data(), 0, 1);
+        C::ExpertJobMulti job;
+        job.blob = blob.data();
+        job.nt = 2;
+        job.nact[0] = act.data();
+        job.out[0] = out.data();
+        job.nact[1] = act.data();
+        job.out[1] = out2.data();
+        {
+            C::ExpertPool pool(3, false);
+            pool.run_split_multi_native(f, &job, 1);
+        }
+        compare("CPU pool token 0", out, ref, 2e-5f);
+        compare("CPU pool token 1", out2, ref, 2e-5f);
+        auto L = K::native_expert_layout(gt, dt, N, F);
+        L.compatibility = true;
+        L.u_type = ut;
+        L.u_row = ggml_row_size((ggml_type)ut, N);
+        L.down_off = f.down_off;
+        L.bytes = f.bytes;
+        auto wb = dev<uint8_t>(blob.size());
+        put(wb, blob.data(), blob.size());
+        auto xd = dev<float>(N);
+        put(xd, x.data(), x.size());
+        auto xq = dev<uint8_t>((N / 32) * 36);
+        K::quantize_q8_1_rows(xd, 1, N, xq, nullptr);
+        // Each newly used decoder must match ggml before checking matrix arithmetic.
+        for (int t : types) {
+            auto w = weights(t, 256, 1);
+            auto wd = dev<uint8_t>(w.size());
+            put(wd, w.data(), w.size());
+            auto fd = dev<float>(256);
+            K::iq_dequant_f32(t, wd, 256, fd, nullptr);
+            std::vector<float> a(256), b(256);
+            get(a.data(), fd, 256);
+            ggml_get_type_traits((ggml_type)t)->to_float(w.data(), b.data(), 256);
+            compare("dequant", a, b, 1e-6f);
+            ck(cudaFree(wd));
+            ck(cudaFree(fd));
+        }
+        auto ptr = dev<unsigned long long>(1);
+        unsigned long long addr = (unsigned long long)wb;
+        put(ptr, &addr, 1);
+        auto start = dev<int32_t>(2);
+        int32_t bounds[] = {0, 1};
+        put(start, bounds, 2);
+        auto ng = dev<int32_t>(1);
+        int32_t one = 1;
+        put(ng, &one, 1);
+        auto ids = dev<int32_t>(1);
+        auto scratch = dev<uint8_t>(K::native_expert_scratch_bytes(1, F));
+        auto yd = dev<float>(N);
+        K::native_expert_grouped(L, ptr, start, ng, ids, ids, 1, 1, xq, scratch, yd, nullptr);
+        ck(cudaDeviceSynchronize());
+        get(out.data(), yd, N);
+        std::vector<uint8_t> qa((N / 32) * 36), qh((F / 32) * 36);
+        get(qa.data(), xq, qa.size());
+        get(qh.data(), scratch + 3 * F * sizeof(float), qh.size());
+        auto xf = q8float(qa, N);
+        auto gr = project(gt, g.data(), N, F, xf), ur = project(ut, u.data(), N, F, xf);
+        std::vector<float> gg(F), uu(F);
+        get(gg.data(), (float *)scratch, F);
+        get(uu.data(), (float *)(scratch + F * sizeof(float)), F);
+        compare("GPU gate", gg, gr, 2e-5f);
+        compare("GPU up", uu, ur, 2e-5f);
+        auto dr = project(dt, d.data(), F, N, q8float(qh, F));
+        compare("GPU down", out, dr, 2e-5f);
+        // Empty groups must not touch existing output.
+        int32_t zero = 0;
+        put(ng, &zero, 1);
+        K::native_expert_grouped(L, ptr, start, ng, ids, ids, 1, 1, xq, scratch, yd, nullptr);
+        std::vector<float> empty(N);
+        get(empty.data(), yd, N);
+        if (std::memcmp(empty.data(), out.data(), N * sizeof(float)))
+            return 5;
+        for (void *p : {(void *)wb, (void *)xd, (void *)xq, (void *)ptr, (void *)start, (void *)ng,
+                        (void *)ids, (void *)scratch, (void *)yd})
+            ck(cudaFree(p));
+    }
+    std::puts("Ornith expert parity passed");
+}

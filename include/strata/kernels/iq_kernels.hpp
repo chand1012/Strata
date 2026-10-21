@@ -42,6 +42,10 @@ void iq_dequant_gu_f16(int ggml_type, const void* gate, const void* up, int64_t 
 
 /// The layout of one native expert blob: [gate rows | up rows | down rows], raw GGUF blocks.
 struct NativeExpertLayout {
+    // Explicit opt-in compatibility kernel; the normal fused paths ignore these fields.
+    bool compatibility = false;
+    int u_type = -1;
+    size_t u_row = 0;
     int gu_type = -1, d_type = -1;
     int64_t n_embd = 0, n_ff = 0;
     size_t gu_row = 0, d_row = 0;       // bytes per row
