@@ -82,8 +82,13 @@ These controls are opt-in and specific to the Ornith compatibility path. The bui
 | `STRATA_ORNITH_MTP_COMPACT=1` | Size the two prompt buffers separately for the isolated MTP pass. Retain the same capacity with MTP off for matched controls. |
 | `STRATA_ORNITH_MTP_CACHE=1` | Keep draft-layer slots fixed and exclude draft routing from the main cache replacement budget. Align speculative state with serial decoding at output limits and end tokens. |
 | `STRATA_ORNITH_PCIE_ROWS=1` | Apply the PCIe miss limit per token in batches of up to eight rows, including MTP verification. Reserves extra bounded staging; requires `STRATA_ORNITH_PCIE` above zero. |
+| `STRATA_ORNITH_PIN_HOST=1` | Pin the inference host thread to the physical core reserved by the CPU pool. Leave worker placement unchanged and restore the original affinity on exit. Requires the Ornith hybrid CPU pool. |
+| `STRATA_ORNITH_CACHE_LOAN=1` | Reuse the two prompt buffers as expert-cache space during generation. Requires MMQ on all main layers, MTP off, one text session, and at least eight hybrid rows. Overwritten slots are restored before the next cache read; this transfer counts toward response time. Experimental; see the [decode validation](validation/ORNITH-DECODE.md). |
 | `STRATA_ORNITH_PROFILE=1` | Print synchronized stage timings and streamed byte counts. This diagnostic changes overlap and must not be used for speed claims. |
 | `STRATA_ORNITH_TRACE=1` | Start a CUDA profiler capture after engine warm-up. Use with Nsight Systems' CUDA profiler API capture range. |
+
+`--pool-tasks N` sets the target number of CPU tasks per expert phase (0–4096). Zero retains the existing
+three tasks per participating thread. This changes scheduling granularity, not the number of workers.
 
 `--chunk` and `--pool-workers` remain normal engine arguments. Larger chunks amortize streaming transfers but
 reserve more VRAM and leave fewer resident experts for generation. Increasing PCIe offload or cache-copy budgets
@@ -102,6 +107,11 @@ Apply these arguments and environment values to a copy of the generated server c
 the measured prompt-plus-256-token workload. In particular, Bartowski's faster prompt processing comes with
 slower generation than its original configuration. The setup helper keeps the original conservative defaults.
 See the validation record for full timings, memory usage, numerical differences and comparison limits.
+
+The [subsequent decode tests](validation/ORNITH-DECODE.md) add `STRATA_ORNITH_PIN_HOST=1` for both
+quants on this machine. Unsloth's selected 256-output-token profile also enables `STRATA_ORNITH_CACHE_LOAN=1`;
+it adds a refill pause after the first token and can change outputs through CPU/GPU rounding. Bartowski
+uses pinning alone. The report includes the clock variability, output comparisons and memory checks.
 
 The benchmark utility `tools/bench_ornith.py` runs exact-length chat prompts through the engine protocol. It accepts
 an engine command/environment JSON, the GGUF and its chat template, and a new output directory. It unloads
@@ -128,9 +138,9 @@ runs with identical input IDs.
 Build and run the focused checks on an otherwise idle GPU:
 
 ```sh
-cmake --build build --target ornith_parity ornith_mmq_test pool_tasks_test native_grouped_parity \
+cmake --build build --target ornith_parity ornith_mmq_test pool_tasks_test pool_affinity_test native_grouped_parity \
   gguf_reader_test gguf_split_test gguf_geometry_test ornith_layout_test -j 6
-ctest --test-dir build -R '^(ornith_parity|ornith_integer_parity|ornith_mmq_test|pool_tasks_test|native_grouped_parity|gguf_reader_test|gguf_split_test|gguf_geometry_test|ornith_layout_test)$' --output-on-failure
+ctest --test-dir build -R '^(ornith_parity|ornith_integer_parity|ornith_mmq_test|pool_tasks_test|pool_affinity_test|native_grouped_parity|gguf_reader_test|gguf_split_test|gguf_geometry_test|ornith_layout_test)$' --output-on-failure
 ```
 
 `ornith_parity` checks the actual 3072/1024 expert geometry, IQ1_S/Q2_K, Q3_K, mixed Q4_K/Q5_K and IQ down

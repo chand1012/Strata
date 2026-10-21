@@ -1,0 +1,16 @@
+========= COMPUTE-SANITIZER
+strata-q36: $WORK/bartowski-q3-k-s/Ornith-1.5-122B-Q3_K_S-00001-of-00002.gguf: 899 tensors (layout checked), 6.47 GiB on the GPU in 7.7 s (the routed experts are placed after the engine's buffers)
+strata: K-quant prompt kernels from $WORK/build-ornith/libstrata_kq.so (STRATA_MMQ_KQ=1)
+strata-q36: prompt experts on MMQ (int8)
+strata-q36: context 8192 cells, prompt chunk 256, MTP block loaded, 13.56 GiB of VRAM free
+strata-q36: prompt staging borrows 2.91 GiB of a 6.02 GiB expert arena; deferred refill included in decode
+strata-q36: Ornith decode sends at most 8 missed experts per token/layer over PCIe (up to 1 rows, 46.5 MiB staging)
+strata-q36: hybrid experts: 32 of 256 per layer in VRAM (6.02 GiB), all 48.16 GiB in pinned host memory, the rest of a batch of <= 128 rows on 8 CPU threads, bigger prompt chunks streamed (2.91 GiB staging); 106.4 s
+strata-q36: Ornith host pinned to CPU 0; worker placement unchanged
+strata-q36: warmed up in 31.7 s (one prompt chunk, a decode step)
+gen: 10633 51080 13 561 14367 7803 10633 51080
+strata-q36: prompt 513 tokens in 60371.0 ms (8.5 tok/s), 8 generated in 32602.3 ms (0.2 tok/s)
+strata-q36: cache loan refills 1, 254.0 ms, 3162931200 bytes
+strata-q36: Ornith PCIe decode entries 1974
+strata-q36: hybrid experts: 3072 of 3072 batch entries on the GPU (100.0%), 0 on the CPU pool in 0 ms, 1333 slot replacements
+========= ERROR SUMMARY: 0 errors

@@ -1276,6 +1276,7 @@ struct Engine {
     }
 #if defined(STRATA_Q36_CPU_POOL)
     std::unique_ptr<strata::kernels::cpu::ExpertPool> pool;
+    strata::kernels::cpu::ThreadAffinity host_affinity;
     std::vector<strata::kernels::cpu::ExpertJobMulti> jobs;
 #endif
     float *h_h = nullptr, *cpu_out = nullptr, *ecpu = nullptr;
@@ -1283,8 +1284,17 @@ struct Engine {
     uint8_t* acts = nullptr;   // per token: its quantized activation (kNativeActBytes)
     cudaEvent_t ev_route = nullptr;
     uint8_t* stage[2] = {};
+    // Opt-in prompt staging aliases a prefix of the expert arena. The cache
+    // pointers stay fixed; only the slots overwritten by streaming are refilled.
+    uint8_t* loan_arena = nullptr;
+    std::vector<int> loan_slots;
+    bool loan_dirty = false;
+    long long loan_refills = 0;
+    double loan_refill_ms = 0;
+    size_t loan_refill_bytes = 0;
     // A bounded miss buffer, separate from the prompt stream. Optional
     // verification rows use the same per-token selection as serial decode.
+    int pool_tasks = 0;
     int ornith_pcie = 0;
     bool ornith_pcie_rows = false;
     bool ornith_mtp_cache = false;
@@ -2299,6 +2309,7 @@ struct Engine {
 
     /// A streamed forward over the state indices `seq`: the first two layers' experts start copying now.
     void stream_begin(const std::vector<int>& seq) {
+        if (loan_arena && !seq.empty()) loan_dirty = true;
         stream_seq = seq;
         stream_pos = 0;
         for (int i = 0; i < 2 && i < (int) seq.size(); ++i) stream_kick(i);
@@ -2315,7 +2326,7 @@ struct Engine {
         const Hy& H = hy[(size_t) stream_seq[(size_t) i]];
         // fewer than half the experts resident (a 12 GB card): the one whole-layer copy is faster than many small ones
         // (RTX 3060, UD-Q4_K_XL at 37 of 256: pp2048 1970 whole vs 1540 in runs)
-        if (all || 2 * L.n_slots < ne) {
+        if (loan_arena || all || 2 * L.n_slots < ne) {
             if (ornith_profile && !warming) stream_h2d += L.stride * (size_t)ne;
             CK(cudaMemcpyAsync(stage[b], L.hblobs, L.stride * (size_t)ne, cudaMemcpyHostToDevice, cst));
         } else {
@@ -2337,6 +2348,8 @@ struct Engine {
                 x = y;
             }
         }
+        if (loan_arena)
+            CK(cudaMemsetAsync(stage[b] + L.stride * (size_t)ne, 0, kMmqTail, cst));
         CK(cudaEventRecord(ev_copy[b], cst));
     }
     const uint8_t* stream_take(int li) {
@@ -2355,6 +2368,36 @@ struct Engine {
         ++stream_pos;
     }
 
+    // Deferred until a cache-reading forward, so repeated prompts need not
+    // refill unused slots. This transfer is charged to decode, not omitted from
+    // end-to-end timing. A short prompt/tail refills before its first cache read.
+    void restore_loan() {
+        if (!loan_dirty) return;
+        const auto t0 = Clock::now();
+        CK(cudaStreamSynchronize(cst));
+        CK(cudaStreamSynchronize(st));
+        for (size_t li = 0; li < loan_slots.size(); ++li) {
+            const int count = loan_slots[li];
+            if (!count) continue;
+            const Layer& L = layer_at((int)li);
+            const Hy& H = hy[li];
+            for (int slot = 0; slot < count;) {
+                const int expert = H.exp_in_slot[(size_t)slot];
+                int end = slot + 1;
+                while (end < count && H.exp_in_slot[(size_t)end] == expert + end - slot) ++end;
+                const size_t bytes = (size_t)(end - slot) * L.stride;
+                CK(cudaMemcpyAsync(L.blobs + (size_t)slot * L.stride,
+                                   L.hblobs + (size_t)expert * L.stride, bytes, cudaMemcpyHostToDevice, st));
+                if (!warming) loan_refill_bytes += bytes;
+                slot = end;
+            }
+            CK(cudaMemsetAsync(L.blobs + (size_t)L.n_slots * L.stride, 0, kMmqTail, st));
+        }
+        CK(cudaStreamSynchronize(st));
+        loan_dirty = false;
+        if (!warming) { ++loan_refills; loan_refill_ms += ms_since(t0); }
+    }
+
     /// The GPU half of a hybrid MoE: the routing to the host, the resident experts' entries grouped and run.
     void moe_hybrid_gpu(const Layer& L, size_t li, int T) {
         const auto& g = m->g;
@@ -2363,6 +2406,29 @@ struct Engine {
         CK(cudaMemcpyAsync(h_ids, ids, (size_t) n_ent * 4, cudaMemcpyDeviceToHost, st));
         CK(cudaMemcpyAsync(h_h, h, (size_t) T * N * 4, cudaMemcpyDeviceToHost, st));
         CK(cudaEventRecord(ev_route, st));
+        if (loan_dirty && loan_slots[li]) {
+            // A small prompt tail needs only its routed resident experts. Do
+            // not charge a whole-arena refill to time to first token. The next
+            // decode restores the remaining cache before it can be read.
+            CK(cudaEventSynchronize(ev_route));
+            const auto t0 = Clock::now();
+            const Hy& H = hy[li];
+            std::vector<char> needed((size_t)loan_slots[li], 0);
+            for (int64_t e = 0; e < n_ent; ++e) {
+                const int slot = H.slot_of[(size_t)h_ids[e]];
+                if (slot >= 0 && slot < loan_slots[li]) needed[(size_t)slot] = 1;
+            }
+            for (size_t slot = 0; slot < needed.size(); ++slot) {
+                if (!needed[slot]) continue;
+                CK(cudaMemcpyAsync(L.blobs + slot * L.stride,
+                                   L.hblobs + (size_t)H.exp_in_slot[slot] * L.stride,
+                                   L.stride, cudaMemcpyHostToDevice, st));
+                if (!warming) loan_refill_bytes += L.stride;
+            }
+            CK(cudaMemsetAsync(L.blobs + (size_t)L.n_slots * L.stride, 0, kMmqTail, st));
+            CK(cudaStreamSynchronize(st));
+            if (!warming) loan_refill_ms += ms_since(t0);
+        }
         group_entries(L, hy[li].slot_of_d, T);
         if (!xq_post) quant(h, N, T, xq);   // the experts' and the shared expert's input
         K::native_expert_grouped(L.L, grp_ptr, grp_start, n_groups, ent_dst, ent_tok,
@@ -2623,6 +2689,7 @@ struct Engine {
             }
         };
         if (n == 1) {
+            restore_loan();
             CK(cudaStreamSynchronize(st));   // the pinned staging is free again
             hpin[0] = toks[0];
             hpin[1] = (int32_t) pos;
@@ -3104,15 +3171,42 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             stream_bytes[0] = std::max(main_stream, m.mtp.stride * (size_t)ne);
         stream_bytes[1] = main_stream;
     }
-    const size_t staging = E.use_mmq && E.main_hybrid ? stream_bytes[0] + stream_bytes[1] + 2 * kMmqTail : 0;
+    const char* loan_env = std::getenv("STRATA_ORNITH_CACHE_LOAN");
+    const bool loan = loan_env && std::strcmp(loan_env, "1") == 0;
+    if (loan && (!m.layers[0].L.compatibility || !E.use_mmq || !E.main_hybrid || E.mtp_d ||
+                 E.n_sess != 1 || E.vision || E.hybrid_t < Engine::kVerify)) {
+        err = "STRATA_ORNITH_CACHE_LOAN requires Ornith MMQ, hybrid experts, MTP off, one text session and hybrid rows >= 8";
+        return false;
+    }
+    if (loan)
+        for (size_t li = 0; li < m.layers.size(); ++li)
+            if (!E.mmq_layer(li)) { err = "cache loan requires MMQ for every main layer"; return false; }
+    const auto aligned = [](size_t n) { return (n + 255) & ~(size_t)255; };
+    const size_t stream_alloc[2] = {loan ? aligned(stream_bytes[0] + kMmqTail) : stream_bytes[0] + kMmqTail,
+                                    loan ? aligned(stream_bytes[1] + kMmqTail) : stream_bytes[1] + kMmqTail};
+    const size_t staging = E.use_mmq && E.main_hybrid ? stream_alloc[0] + stream_alloc[1] : 0;
     const size_t pcie_rows = E.ornith_pcie_rows ? Engine::kPcieRowLimit : 1;
     const size_t pcie_bytes = E.ornith_pcie ? (max_layer / (size_t)ne) * E.ornith_pcie * pcie_rows + kMmqTail : 0;
-    const size_t buffers = staging + pcie_bytes;
+    const size_t buffers = (loan ? 0 : staging) + pcie_bytes;
     size_t slot_bytes = budget2 > buffers ? budget2 - buffers : 0;
     if (slot_bytes + buffers + ((size_t)256 << 20) > fr)
         slot_bytes = fr > buffers + ((size_t)512 << 20) ? fr - buffers - ((size_t)512 << 20) : 0;
     // --expert-slots: that many per layer (tests: the same split with and without the MTP block)
     int S = slots > 0 ? (int) std::min<int64_t>(ne, slots) : (int) std::min<size_t>((size_t) ne, slot_bytes / per_slot);
+    auto arena_size = [&](int slots_per_layer) {
+        size_t bytes = 0;
+        for (const Layer* L : all) bytes += aligned(L->stride * (size_t)slots_per_layer + kMmqTail);
+        return bytes;
+    };
+    size_t arena_bytes = 0;
+    if (loan) {
+        if (slots <= 0) while (S > 0 && arena_size(S) > slot_bytes) --S;
+        arena_bytes = arena_size(S);
+        if (S <= 0 || S >= ne || arena_bytes < staging) {
+            err = "cache loan needs a partial expert cache large enough for both prompt buffers";
+            return false;
+        }
+    }
     if (mtp_only) {   // the main layers all, the MTP block what is left
         const size_t left = budget2 > total_main ? budget2 - total_main : 0;
         S = (int) std::min<size_t>((size_t) ne, left / m.mtp.stride);
@@ -3125,6 +3219,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             if (mtp_only && L != &m.mtp) need += L->stride * (size_t) ne + kMmqTail;
             else need += (S > 0 ? (size_t) S * L->stride + kMmqTail : 0);
         }
+        if (loan) need += arena_bytes - (per_slot * (size_t)S + all.size() * kMmqTail);
         if (need > fr) {
             err = "not enough VRAM left for the hybrid experts' buffers and slots (" + std::to_string((need >> 20)) +
                   " MiB needed, " + std::to_string(fr >> 20) + " MiB free after the weights, the context and the sessions): use "
@@ -3147,7 +3242,13 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             return false;
         }
     }
-    size_t off = 0;
+    size_t off = 0, cache_off = 0;
+    if (loan) {
+        CK(cudaMalloc(&E.loan_arena, arena_bytes));
+        E.loan_slots.resize(all.size(), 0);
+        std::fprintf(stderr, "strata-q36: prompt staging borrows %.2f GiB of a %.2f GiB expert arena; deferred refill included in decode\n",
+                     (double)staging / (1ull << 30), (double)arena_bytes / (1ull << 30));
+    }
     E.hy.resize(all.size());
     for (size_t li = 0; li < all.size(); ++li) {
         Layer& L = *all[li];
@@ -3168,7 +3269,12 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         for (int64_t e = 0; e < ne; ++e) expert_blob(L, e, L.hblobs + (size_t) e * L.stride);
         L.n_slots = S;
         if (S > 0) {
-            CK(cudaMalloc(&L.blobs, L.stride * (size_t) S + kMmqTail));
+            if (loan) {
+                L.blobs = E.loan_arena + cache_off;
+                if (cache_off < staging)
+                    E.loan_slots[li] = (int)std::min<size_t>((size_t)S, (staging - cache_off + L.stride - 1) / L.stride);
+                cache_off += aligned(L.stride * (size_t)S + kMmqTail);
+            } else CK(cudaMalloc(&L.blobs, L.stride * (size_t) S + kMmqTail));
             CK(cudaMemset(L.blobs, 0, L.stride * (size_t) S + kMmqTail));
             CK(cudaMemcpy(L.blobs, L.hblobs, L.stride * (size_t) S, cudaMemcpyHostToDevice));
         }
@@ -3201,8 +3307,11 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     if (staging) {
         CK(cudaStreamCreateWithFlags(&E.cst, cudaStreamNonBlocking));
         for (int b = 0; b < 2; ++b) {
-            CK(cudaMalloc(&E.stage[b], stream_bytes[b] + kMmqTail));
-            CK(cudaMemset(E.stage[b], 0, stream_bytes[b] + kMmqTail));
+            if (loan) E.stage[b] = E.loan_arena + (b ? stream_alloc[0] : 0);
+            else {
+                CK(cudaMalloc(&E.stage[b], stream_alloc[b]));
+                CK(cudaMemset(E.stage[b], 0, stream_alloc[b]));
+            }
             CK(cudaEventCreateWithFlags(&E.ev_copy[b], cudaEventDisableTiming));
             CK(cudaEventCreateWithFlags(&E.ev_used[b], cudaEventDisableTiming));
             CK(cudaEventRecord(E.ev_used[b], E.st));
@@ -3220,7 +3329,8 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         std::fprintf(stderr, "strata-q36: Ornith PCIe decode disabled: expert "
                              "host memory is not pinned\n");
     }
-    E.pool = std::make_unique<C::ExpertPool>(threads);
+    E.pool = std::make_unique<C::ExpertPool>(threads, true, true, C::PoolAffinity::All, E.pool_tasks);
+    if (E.pool_tasks) std::fprintf(stderr, "strata-q36: CPU pool target %d tasks per expert phase\n", E.pool_tasks);
     CK(cudaDeviceSynchronize());
     if (mtp_only)
         std::fprintf(stderr, "strata-q36: every main layer's routed experts in VRAM (%.2f GiB); the MTP block's: %d of "
@@ -3914,7 +4024,15 @@ struct Serve {
         if (E.n_sess > 1) std::printf("INFO batch_slots=%d slot_cache=1\n", E.n_sess);
         std::printf("READY %d stop\n", E.ctx);
         std::fflush(stdout);
+#if defined(STRATA_Q36_CPU_POOL)
+        const auto reader_affinity = E.host_affinity;
+        std::thread reader([&, reader_affinity] {
+            // The input thread inherits the host's mask at creation. It is not
+            // an inference worker, so restore the original allowed CPUs here.
+            if (reader_affinity.valid) strata::kernels::cpu::restore_thread_affinity(reader_affinity);
+#else
         std::thread reader([&] {
+#endif
             std::string l;
             while (std::getline(std::cin, l)) {
                 if (!l.empty() && l.back() == '\r') l.pop_back();
@@ -3972,7 +4090,7 @@ int strata::qwen35::run(int argc, char** argv) {
     int ctx = 32768, chunk = 0, n_gen = 64, bench_pp = 0, bench_tg = 0, mtp_d = 0, cpu_threads = 0, hybrid_rows = 128;
     double expert_vram = -1.0;
     bool warm = true;
-    int expert_slots = 0, batch = 0, draft_vocab = -1;
+    int expert_slots = 0, batch = 0, draft_vocab = -1, pool_tasks = 0;
     bool serve_mode = false, graph = true, vision = false, batch_mtp = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -3985,6 +4103,16 @@ int strata::qwen35::run(int argc, char** argv) {
         else if (a == "--max-new") n_gen = std::atoi(next().c_str());
         else if (a == "--no-token-graph") graph = false;
         else if (a == "--pool-workers") cpu_threads = std::atoi(next().c_str());
+        else if (a == "--pool-tasks") {
+            const std::string value = next();
+            char* end = nullptr;
+            const long tasks = std::strtol(value.c_str(), &end, 10);
+            if (value.empty() || *end || tasks < 0 || tasks > 4096) {
+                std::fprintf(stderr, "strata-q36: --pool-tasks takes 0 .. 4096\n");
+                return 2;
+            }
+            pool_tasks = (int)tasks;
+        }
         else if (a == "--gpu") (void) next();   // applied by strata before the switch (CUDA/HIP_VISIBLE_DEVICES)
         else if (a == "--greedy") {}            // --tokens decodes greedily here anyway
         else if (a == "--serve") serve_mode = true;
@@ -4096,11 +4224,38 @@ int strata::qwen35::run(int argc, char** argv) {
                          fr / 1073741824.0, fr_raw / 1073741824.0, packed / 1073741824.0, experts / 1073741824.0, chunk);
     }
     E.mtp_d = m.has_mtp ? mtp_d : 0;
+    E.pool_tasks = pool_tasks;
     E.init(m, ctx, chunk, batch, vision);
     if (!place_experts(m, E, expert_vram, cpu_threads, hybrid_rows, expert_slots, err)) {
         std::fprintf(stderr, "strata-q36: %s\n", err.c_str());
         return 1;
     }
+#if defined(STRATA_Q36_CPU_POOL)
+    // As in SessionLoopScratch, reserve a physical core for the host that
+    // participates in CPU work and waits for GPU events. Pin once, after the
+    // pool has discovered and created its workers, and restore on every exit.
+    struct RestoreHostAffinity {
+        Engine& E;
+        ~RestoreHostAffinity() {
+            if (E.host_affinity.valid) strata::kernels::cpu::restore_thread_affinity(E.host_affinity);
+        }
+    } restore_host{E};
+    const char* pin_host = std::getenv("STRATA_ORNITH_PIN_HOST");
+    if (pin_host && std::strcmp(pin_host, "1") == 0) {
+        namespace C = strata::kernels::cpu;
+        const int core = C::planned_host_core(C::PoolAffinity::All);
+        if (!m.layers[0].L.compatibility || !E.pool || core < 0) {
+            std::fprintf(stderr, "strata-q36: STRATA_ORNITH_PIN_HOST requires an Ornith CPU pool and a reserved host core\n");
+            return 1;
+        }
+        E.host_affinity = C::pin_current_thread(core);
+        if (!E.host_affinity.valid) {
+            std::fprintf(stderr, "strata-q36: could not pin the Ornith host thread to CPU %d\n", core);
+            return 1;
+        }
+        std::fprintf(stderr, "strata-q36: Ornith host pinned to CPU %d; worker placement unchanged\n", core);
+    }
+#endif
     struct Report {
         Engine& E;
         ~Report() {
@@ -4108,6 +4263,9 @@ int strata::qwen35::run(int argc, char** argv) {
             if (E.m->layers[0].L.compatibility && std::getenv("STRATA_ORNITH_TRACE")) (void)cudaProfilerStop();
 #endif
             E.profile_report();
+            if (E.loan_arena)
+                std::fprintf(stderr, "strata-q36: cache loan refills %lld, %.1f ms, %zu bytes\n",
+                             E.loan_refills, E.loan_refill_ms, E.loan_refill_bytes);
             if (E.ornith_pcie) std::fprintf(stderr, "strata-q36: Ornith PCIe decode entries %lld\n", E.pcie_entries);
             if (E.verify_k)
                 std::fprintf(stderr, "strata-q36 VERIFY: %lld comparisons, %lld mismatches\n", E.v_calls, E.v_bad);
