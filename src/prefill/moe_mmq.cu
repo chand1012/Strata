@@ -266,6 +266,14 @@ Nvfp4Mode nvfp4_mode() {
 
 bool supported(int t) {
     switch ((ggml_type) t) {
+#if defined(STRATA_MMQ_KQUANTS) && defined(STRATA_KQ_DSO)
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K: {
+            const char* on = std::getenv("STRATA_ORNITH_MMQ");
+            return on && std::strcmp(on, "1") == 0 && kq_ok();
+        }
+#endif
         case GGML_TYPE_Q2_0:
 #ifdef STRATA_ORCA_Q4KS_MMQ
         case GGML_TYPE_Q5_0:   // #296 (Q4_K and Q5_1: STRATA_MMQ_KQUANTS)
@@ -463,6 +471,9 @@ void Context::run(const Product& p, void* stream) {
         case GGML_TYPE_TQK7: mul_mat_q_case<GGML_TYPE_TQK7>(ctx, a, s); break;
 #endif
 #if defined(STRATA_MMQ_KQUANTS) && defined(STRATA_KQ_DSO)
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K: case GGML_TYPE_Q6_K: case GGML_TYPE_Q5_1: {
             const int e = kq::run((int) t, &a, s);
             if (e != 0) {

@@ -104,8 +104,10 @@ __device__ __forceinline__ float vec_dot_q2_0_q8_1(const void* __restrict__ vbq,
     return d2 * d8 * sumi;
 }
 
-__device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1,
-                                                      const int& kbx, const int& iqs) {
+template <bool Fractional = false>
+__device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(const void* __restrict__ vbq,
+                                                      const block_q8_1* __restrict__ bq8_1, const int& kbx,
+                                                      const int& iqs) {
     const block_iq2_xxs* bq2 = (const block_iq2_xxs*) vbq + kbx;
     const int q2 = get_int_b2(bq2->qs, iqs);
     const uint8_t* aux8 = (const uint8_t*) &q2;
@@ -125,9 +127,13 @@ __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(const void* __restrict__ v
         sumi = ggml_cuda_dp4a(grid1, u1, sumi);
     }
     const int ls = aux32 >> 27 | 1;
-    sumi = sumi * ls / 8;
     const float d = __half2float(bq2->d) * __low2float(bq8_1[iqs / 2].ds);
-    return d * sumi;
+    if constexpr (Fractional)
+        return d * (sumi * ls * 0.125f);
+    else {
+        sumi = sumi * ls / 8;
+        return d * sumi;
+    }
 }
 
 __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1,
@@ -161,6 +167,7 @@ __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(const void* __restrict__ vb
     return d * sumi;
 }
 
+template <bool Fractional = false>
 __device__ __forceinline__ float vec_dot_iq2_s_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1,
                                                     const int& kbx, const int& iqs) {
     const block_iq2_s* bq2 = (const block_iq2_s*) vbq + kbx;
@@ -189,9 +196,15 @@ __device__ __forceinline__ float vec_dot_iq2_s_q8_1(const void* __restrict__ vbq
             sumi1 = ggml_cuda_dp4a(grid_h, u1, sumi1);
         }
     }
-    const int sumi = (sumi0 * ls0 + sumi1 * ls1 + (sumi0 + sumi1) / 2) / 4;
     const float d = __half2float(bq2->d) * __low2float(bq8_1[iqs / 2].ds);
-    return d * sumi;
+    if constexpr (Fractional) {
+        // Ornith's independent float reference retains the fractional scale.
+        // Keep legacy integer truncation unchanged for every existing caller.
+        return d * (0.25f * (sumi0 * ls0 + sumi1 * ls1 + 0.5f * (sumi0 + sumi1)));
+    } else {
+        const int sumi = (sumi0 * ls0 + sumi1 * ls1 + (sumi0 + sumi1) / 2) / 4;
+        return d * sumi;
+    }
 }
 
 __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1,
@@ -700,6 +713,146 @@ __device__ __forceinline__ float vec_dot_tq_q8_1(const void* __restrict__ vbq, c
     return tq_apply(tq_load<TY>(vbq, kbx, iqs), bq8_1, iqs);
 }
 
+// Pinned llama.cpp MMVQ arithmetic for Ornith-only decode dispatch.
+static __device__ __forceinline__ float vec_dot_q2_K_q8_1_impl_mmvq(const int& v, const int* __restrict__ u,
+                                                                    const uint8_t* __restrict__ scales,
+                                                                    const half2& dm2, const float* __restrict__ d8) {
+
+    float sumf_d = 0.0f;
+    float sumf_m = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR2_K; ++i) {
+        const int sc = scales[2 * i];
+
+        const int vi = (v >> (2 * i)) & 0x03030303;
+
+        sumf_d += d8[i] * (ggml_cuda_dp4a(vi, u[i], 0) * (sc & 0xF)); // SIMD dot product
+
+        // fill int with 4x m
+        int m = sc >> 4;
+        m |= m << 8;
+        m |= m << 16;
+        sumf_m += d8[i] * ggml_cuda_dp4a(m, u[i], 0); // multiply constant q2_K part with sum of q8_1 values
+    }
+
+    const float2 dm2f = __half22float2(dm2);
+
+    return dm2f.x * sumf_d - dm2f.y * sumf_m;
+}
+
+static __device__ __forceinline__ float
+vec_dot_q3_K_q8_1_impl_mmvq(const int& vl, const int& vh, const int* __restrict__ u, const uint8_t* __restrict__ scales,
+                            const int& scale_offset, const float& d3, const float* __restrict__ d8) {
+
+    float sumf = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < QR3_K; ++i) {
+        const int isc = scale_offset + 2 * i;
+
+        const int isc_low = isc % (QK_K / 32);
+        const int sc_shift_low = 4 * (isc / (QK_K / 32));
+        const int sc_low = (scales[isc_low] >> sc_shift_low) & 0xF;
+
+        const int isc_high = isc % (QK_K / 64);
+        const int sc_shift_high = 2 * (isc / (QK_K / 64));
+        const int sc_high = ((scales[(QK_K / 32) + isc_high] >> sc_shift_high) & 3) << 4;
+
+        const int sc = (sc_low | sc_high) - 32;
+
+        const int vil = (vl >> (2 * i)) & 0x03030303;
+
+        const int vih = ((vh >> i) << 2) & 0x04040404;
+
+        const int vi = __vsubss4(vil, vih);
+
+        sumf += d8[i] * (ggml_cuda_dp4a(vi, u[i], 0) * sc); // SIMD dot product
+    }
+
+    return d3 * sumf;
+}
+
+static __device__ __forceinline__ float
+vec_dot_q2_K_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1, const int& kbx, const int& iqs) {
+
+    const block_q2_K* bq2_K = (const block_q2_K*)vbq + kbx;
+
+    const int bq8_offset = QR2_K * (iqs / QI8_1);
+    const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1 / 2);
+
+    const uint8_t* scales = bq2_K->scales + scale_offset;
+
+    const int v = get_int_b4(bq2_K->qs, iqs);
+    int u[QR2_K];
+    float d8[QR2_K];
+
+#pragma unroll
+    for (int i = 0; i < QR2_K; ++i) {
+        u[i] = get_int_b4(bq8_1[bq8_offset + i].qs, iqs % QI8_1);
+        d8[i] = __low2float(bq8_1[bq8_offset + i].ds);
+    }
+
+    return vec_dot_q2_K_q8_1_impl_mmvq(v, u, scales, bq2_K->dm, d8);
+}
+
+static __device__ __forceinline__ float
+vec_dot_q3_K_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1, const int& kbx, const int& iqs) {
+
+    const block_q3_K* bq3_K = (const block_q3_K*)vbq + kbx;
+
+    const int bq8_offset = QR3_K * (iqs / (QI3_K / 2));
+    const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1 / 2);
+
+    const float d = bq3_K->d;
+
+    const int vl = get_int_b2(bq3_K->qs, iqs);
+
+    // invert the mask with ~ so that a 0/1 results in 4/0 being subtracted
+    const int vh = ~get_int_b2(bq3_K->hmask, iqs % (QI3_K / 2)) >> bq8_offset;
+
+    int u[QR3_K];
+    float d8[QR3_K];
+
+#pragma unroll
+    for (int i = 0; i < QR3_K; ++i) {
+        u[i] = get_int_b4(bq8_1[bq8_offset + i].qs, iqs % QI8_1);
+        d8[i] = __low2float(bq8_1[bq8_offset + i].ds);
+    }
+
+    return vec_dot_q3_K_q8_1_impl_mmvq(vl, vh, u, bq3_K->scales, scale_offset, d, d8);
+}
+
+static __device__ __forceinline__ float
+vec_dot_iq1_s_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1, const int& kbx, const int& iqs) {
+    const block_iq1_s* bq1 = (const block_iq1_s*)vbq + kbx;
+
+    const int qs_packed = get_int_b2(bq1->qs, iqs);
+    const uint8_t* qs = (const uint8_t*)&qs_packed;
+
+    const int qh = bq1->qh[iqs];
+
+    int sumi = 0;
+#pragma unroll
+    for (int l0 = 0; l0 < 8; l0 += 2) {
+        const int grid = iq1s_grid_gpu[qs[l0 / 2] | (((qh >> 3 * (l0 / 2)) & 0x07) << 8)];
+
+        const int grid0 = (grid >> 0) & 0x0F0F0F0F;
+        const int grid1 = (grid >> 4) & 0x0F0F0F0F;
+
+        const int u0 = get_int_b4(bq8_1[iqs].qs, l0 + 0);
+        const int u1 = get_int_b4(bq8_1[iqs].qs, l0 + 1);
+
+        sumi = ggml_cuda_dp4a(grid0, u0, sumi);
+        sumi = ggml_cuda_dp4a(grid1, u1, sumi);
+    }
+
+    const float d1q = __half2float(bq1->d) * (((qh >> 11) & 0x0E) + 1);
+    const float delta = -1.0f + IQ1S_DELTA - (qh & 0x8000) * (2.0f * IQ1S_DELTA / 0x8000);
+    const float2 ds = __half22float2(bq8_1[iqs].ds);
+    return d1q * (ds.x * sumi + ds.y * delta);
+}
+
 // ---------------------------------------------------------------- the formats
 // qk = values per block, ipb = dot calls per block (qi / vdr), step = the iqs stride between calls.
 template<int TY> struct Fmt;
@@ -744,6 +897,25 @@ template<> struct Fmt<145> { static constexpr int qk = 128, ipb = 8, step = 4;
     __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) { return vec_dot_tq_q8_1<145>(v, y, kbx, iqs); } };
 template<> struct Fmt<146> { static constexpr int qk = 128, ipb = 8, step = 4;
     __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) { return vec_dot_tq_q8_1<146>(v, y, kbx, iqs); } };
+
+template <> struct Fmt<10> {
+    static constexpr int qk = 256, ipb = QI2_K, step = 1;
+    __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) {
+        return vec_dot_q2_K_q8_1(v, y, kbx, iqs);
+    }
+};
+template <> struct Fmt<11> {
+    static constexpr int qk = 256, ipb = QI3_K, step = 1;
+    __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) {
+        return vec_dot_q3_K_q8_1(v, y, kbx, iqs);
+    }
+};
+template <> struct Fmt<19> {
+    static constexpr int qk = 256, ipb = QI1_S, step = 1;
+    __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) {
+        return vec_dot_iq1_s_q8_1(v, y, kbx, iqs);
+    }
+};
 
 // The formats of each role, one list each so a type cannot be in one switch and missing from another.  Every
 // entry is a kernel template for each CUDA architecture of the build, hence two lists rather than one.
@@ -3060,6 +3232,62 @@ __global__ void ornith_projection_kernel(int type, size_t offset, size_t row_byt
     }
 }
 
+// Integer dot products consume compressed weights directly, without a
+// shared-memory FP32 weight expansion. Projection formats remain independent.
+template <int TY>
+__global__ void ornith_dot_kernel(size_t offset, size_t row_bytes, int n_in, int n_out, bool down,
+                                  const unsigned long long* ptr, const int32_t* start, const int32_t* groups,
+                                  const int32_t* dst, const int32_t* tok, const block_q8_1* x, float* out) {
+    const int g = blockIdx.y, lane = threadIdx.x % 32, r = blockIdx.x * 4 + threadIdx.x / 32;
+    if (g >= *groups || r >= n_out) return;
+    const auto* w = (const uint8_t*)ptr[g] + offset + (size_t)r * row_bytes;
+    for (int e = start[g]; e < start[g + 1]; ++e) {
+        const auto* a = x + (size_t)(down ? e : tok[e]) * (n_in / 32);
+        float sum;
+        if constexpr (TY == 16 || TY == 22) {
+            float partial = 0;
+            for (int k = lane; k < (n_in / 256) * 8; k += 32) {
+                if constexpr (TY == 16)
+                    partial += vec_dot_iq2_xxs_q8_1<true>(w, a + (k / 8) * 8, k / 8, 2 * (k % 8));
+                else
+                    partial += vec_dot_iq2_s_q8_1<true>(w, a + (k / 8) * 8, k / 8, 2 * (k % 8));
+            }
+            sum = warp_sum(partial);
+        } else {
+            sum = row_dot<TY>(w, a, n_in / Fmt<TY>::qk, lane);
+        }
+        if (lane == 0) out[(size_t)(down ? dst[e] : e) * n_out + r] = sum;
+    }
+}
+
+void launch_ornith_dot(int type, size_t offset, size_t row_bytes, int n_in, int n_out, bool down, int64_t cap_groups,
+                       const unsigned long long* ptr, const int32_t* start, const int32_t* groups, const int32_t* dst,
+                       const int32_t* tok, const block_q8_1* x, float* out, cudaStream_t s) {
+    const dim3 grid((n_out + 3) / 4, (unsigned)cap_groups);
+    switch (type) {
+        // clang-format off
+#define ORNITH_DOT_CASE(T) \
+        case T: ornith_dot_kernel<T><<<grid, 128, 0, s>>>(offset, row_bytes, n_in, n_out, down, \
+            ptr, start, groups, dst, tok, x, out); break;
+        ORNITH_DOT_CASE(8)
+        ORNITH_DOT_CASE(10)
+        ORNITH_DOT_CASE(11)
+        ORNITH_DOT_CASE(12)
+        ORNITH_DOT_CASE(13)
+        ORNITH_DOT_CASE(16)
+        ORNITH_DOT_CASE(18)
+        ORNITH_DOT_CASE(19)
+        ORNITH_DOT_CASE(21)
+        ORNITH_DOT_CASE(22)
+        ORNITH_DOT_CASE(23)
+#undef ORNITH_DOT_CASE
+            // clang-format on
+        default:
+            ornith_projection_kernel<<<dim3(n_out, (unsigned)cap_groups), 32, 0, s>>>(
+                type, offset, row_bytes, n_in, n_out, down, ptr, start, groups, dst, tok, x, out);
+    }
+}
+
 // flat: superblock i -> y + 256 i
 template<typename dst_t>
 __global__ void dequant_flat_kernel(int ty, const void* __restrict__ vx, dst_t* __restrict__ y,
@@ -4853,16 +5081,31 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     block_q8_1* hq = (block_q8_1*) ((uint8_t*) scratch + 3 * fa);
     const auto* X = (const block_q8_1*) x_q8_1;
     if (L.compatibility) {
-        const dim3 gu((unsigned) L.n_ff, (unsigned) cap_groups);
-        ornith_projection_kernel<<<gu, 32, 0, s>>>(L.gu_type, 0, L.gu_row, L.n_embd, L.n_ff, false,
-            grp_ptr, grp_start, n_groups, ent_dst, ent_tok, X, gate);
-        ornith_projection_kernel<<<gu, 32, 0, s>>>(L.u_type, L.up_off, L.u_row, L.n_embd, L.n_ff, false,
-            grp_ptr, grp_start, n_groups, ent_dst, ent_tok, X, up);
-        swiglu_q8_1_entries_kernel<<<(unsigned) ((cap_entries * L.n_ff + 255) / 256), 256, 0, s>>>(
-            gate, up, grp_start, n_groups, (int) L.n_ff, hq);
-        const dim3 dn((unsigned) L.n_embd, (unsigned) cap_groups);
-        ornith_projection_kernel<<<dn, 32, 0, s>>>(L.d_type, L.down_off, L.d_row, L.n_ff, L.n_embd, true,
-            grp_ptr, grp_start, n_groups, ent_dst, ent_tok, hq, out);
+        static const int mode = [] {
+            const char* v = std::getenv("STRATA_ORNITH_DECODE");
+            return v ? std::atoi(v) : 0;
+        }();
+        if (mode == 3) {
+            launch_ornith_dot(L.gu_type, 0, L.gu_row, L.n_embd, L.n_ff, false, cap_groups, grp_ptr, grp_start, n_groups,
+                              ent_dst, ent_tok, X, gate, s);
+            launch_ornith_dot(L.u_type, L.up_off, L.u_row, L.n_embd, L.n_ff, false, cap_groups, grp_ptr, grp_start,
+                              n_groups, ent_dst, ent_tok, X, up, s);
+            swiglu_q8_1_entries_kernel<<<(unsigned)((cap_entries * L.n_ff + 255) / 256), 256, 0, s>>>(
+                gate, up, grp_start, n_groups, (int)L.n_ff, hq);
+            launch_ornith_dot(L.d_type, L.down_off, L.d_row, L.n_ff, L.n_embd, true, cap_groups, grp_ptr, grp_start,
+                              n_groups, ent_dst, ent_tok, hq, out, s);
+        } else {
+            const dim3 gu((unsigned)L.n_ff, (unsigned)cap_groups);
+            ornith_projection_kernel<<<gu, 32, 0, s>>>(L.gu_type, 0, L.gu_row, L.n_embd, L.n_ff, false, grp_ptr,
+                                                       grp_start, n_groups, ent_dst, ent_tok, X, gate);
+            ornith_projection_kernel<<<gu, 32, 0, s>>>(L.u_type, L.up_off, L.u_row, L.n_embd, L.n_ff, false, grp_ptr,
+                                                       grp_start, n_groups, ent_dst, ent_tok, X, up);
+            swiglu_q8_1_entries_kernel<<<(unsigned)((cap_entries * L.n_ff + 255) / 256), 256, 0, s>>>(
+                gate, up, grp_start, n_groups, (int)L.n_ff, hq);
+            const dim3 dn((unsigned)L.n_embd, (unsigned)cap_groups);
+            ornith_projection_kernel<<<dn, 32, 0, s>>>(L.d_type, L.down_off, L.d_row, L.n_ff, L.n_embd, true, grp_ptr,
+                                                       grp_start, n_groups, ent_dst, ent_tok, hq, out);
+        }
         check("native_expert_grouped (Ornith compatibility)");
         return;
     }

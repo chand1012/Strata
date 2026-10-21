@@ -88,7 +88,7 @@ option(STRATA_PREFILL_MMQ "Build the optional GGML MMQ prefill path for HIP" OFF
 # HIP a code object loads on first use, so they cost other models nothing there (R9700: the same slots).  Used at run
 # time with STRATA_MMQ_KQ=1 (opt-in: it changes the prompt's rounding against the FP16 path).
 option(STRATA_MMQ_TQ_OVERLAY "Gyro trellis MMQ prompt kernels on an upstream llama.cpp: an overlay of its ggml-cuda headers written at configure time (cmake/strata_ggml_tq_overlay.cmake)" ON)
-option(STRATA_MMQ_KQUANTS "Build the MMQ prompt kernels for Q4_K / Q5_K / Q5_1 / Q6_K: the experts of Unsloth's K-quant files, and on HIP the dense GGUF projections (STRATA_DENSE_MMQ)" ON)
+option(STRATA_MMQ_KQUANTS "Build the MMQ prompt kernels for Q4_K / Q5_K / Q5_1 / Q6_K (plus Ornith IQ1_S / Q2_K / Q3_K on CUDA): the experts of Unsloth's K-quant files, and on HIP the dense GGUF projections (STRATA_DENSE_MMQ)" ON)
 # Q6_K gate/up in the grouped expert kernels (Unsloth's UD-Q6_K_XL, and layer 2 of UD-Q5_K_XL; docs/QUANTS.md).  On by
 # default since MODEL-UPDATE Phase 1: one more instance per grouped kernel in iq_kernels.cu, +19 KB of sm_60 code,
 # measured to leave every expert-cache slot count as it was (P100, R9700).  -DSTRATA_Q6K_EXPERTS=OFF drops it.
@@ -1634,6 +1634,8 @@ if(STRATA_NATIVE_EXPERTS)
       target_link_libraries(ornith_parity PRIVATE strata_kernels strata_kernels_cpu ${_strata_gpu_runtime_target})
       add_test(NAME ornith_parity COMMAND ornith_parity)
       set_tests_properties(ornith_parity PROPERTIES TIMEOUT 300)
+      add_test(NAME ornith_integer_parity COMMAND ornith_parity)
+      set_tests_properties(ornith_integer_parity PROPERTIES TIMEOUT 300 ENVIRONMENT STRATA_ORNITH_DECODE=3)
     endif()
 
     set_tests_properties(pool_tasks_test PROPERTIES TIMEOUT 180)
@@ -1726,6 +1728,9 @@ if(STRATA_NATIVE_EXPERTS)
     # model.  gfx906 (HIP: code objects load on first use) keeps them in strata_mmq.
     set(_strata_mmq_cuda_types ${_strata_mmq_types})
     set(_strata_kq_types q4_k q5_k q5_1 q6_k)
+    if(NOT STRATA_HIP_GFX906)
+      list(APPEND _strata_kq_types iq1_s q2_k q3_k) # opt-in Ornith prompt products, CUDA DSO only
+    endif()
     set(_strata_kq_dso OFF)
     if(STRATA_MMQ_KQUANTS AND STRATA_HIP_GFX906)
       list(APPEND _strata_mmq_cuda_types ${_strata_kq_types})
@@ -1882,6 +1887,12 @@ if(STRATA_NATIVE_EXPERTS)
       add_test(NAME prefill_mmq_kquant_test COMMAND prefill_mmq_kquant_test)
       # the K-quant MMQ is opt-in at run time (STRATA_MMQ_KQ=1), and on CUDA it is strata_kq next to the test
       set_tests_properties(prefill_mmq_kquant_test PROPERTIES TIMEOUT 120 ENVIRONMENT STRATA_MMQ_KQ=1)
+      if(STRATA_ENABLE_CUDA AND NOT STRATA_HIP_GFX906)
+        add_executable(ornith_mmq_test tests/cuda/ornith_mmq_test.cpp)
+        target_link_libraries(ornith_mmq_test PRIVATE strata_prefill strata_mmq ggml-cpu ${_strata_gpu_runtime_target})
+        add_test(NAME ornith_mmq_test COMMAND ornith_mmq_test)
+        set_tests_properties(ornith_mmq_test PROPERTIES TIMEOUT 600 ENVIRONMENT "STRATA_MMQ_KQ=1;STRATA_ORNITH_MMQ=1")
+      endif()
     endif()
     # the NVFP4 expert products (w4a8 / w4a4, STRATA_PREFILL_NVFP4) against a double-precision reference
     add_executable(mmq_nvfp4_parity src/prefill/mmq_nvfp4_parity.cpp)

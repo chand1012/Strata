@@ -1,5 +1,8 @@
 # Ornith validation — 2026-10-21
 
+This is the initial compatibility validation. Later opt-in optimization results are recorded in
+[the performance validation](ORNITH-PERFORMANCE.md).
+
 Tested on an RTX 3090 Ti (24 GiB VRAM), i7-10700 (8 physical cores) and 64 GB installed RAM
 (about 61 GiB usable). Built with CUDA 13.0.48 and GNU 13.3.0, for compute capability 8.6, from upstream
 `9de04cd44e927a9a3df6bbc0e94fc1be8b844ba4` plus this branch's patch. The pinned ggml revision is
@@ -48,7 +51,7 @@ used the compiled binary on the host with explicit CUDA library paths and system
 HIP and SYCL were not built or tested. Vision, MTP generation, concurrent serving, a full 8K-token prompt and
 full-model logit parity against llama.cpp were not tested. The GGML comparison above covers expert arithmetic,
 not an assertion of identical complete model logits. The compatibility path uses grouped prompt kernels;
-optimized mixed-format MMQ is not implemented.
+optimized mixed-format MMQ was not implemented in that compatibility build.
 
 The [machine-readable record](ornith-122b.json) contains prompts, output token IDs, outputs, engine protocol
 statistics, resource samples and the tested executable's SHA-256. See [setup instructions](../ORNITH.md).

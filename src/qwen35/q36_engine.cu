@@ -35,6 +35,9 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#if !defined(__HIPCC__)
+#include <cuda_profiler_api.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -1095,7 +1098,8 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         }
         const size_t gsz = (size_t) g.n_ff * y.L.gu_row, dsz = (size_t) g.n_embd * y.L.d_row;
         // a stride in whole blocks of both parts' types (MMQ steps over the experts by blocks), 16-byte aligned
-        const size_t al = lcm_sz(lcm_sz(block_bytes(y.L.gu_type), block_bytes(y.L.d_type)), 16);
+        size_t al = lcm_sz(lcm_sz(block_bytes(y.L.gu_type), block_bytes(y.L.d_type)), 16);
+        if (ornith) al = lcm_sz(al, block_bytes(y.L.u_type));
         y.stride = (y.L.bytes + al - 1) / al * al;
         y.src_g = gm.shard(sg).tensor_data(*tg);
         y.src_u = gm.shard(su).tensor_data(*tu);
@@ -1200,6 +1204,8 @@ struct Engine {
     size_t kAttScoreFloats = (size_t) 64 << 20;   // 256 MB (16 M floats when the experts' fit is close)
     // the prompt's MMQ experts
     bool use_mmq = false;
+    std::vector<bool> layer_mmq;
+    bool mmq_layer(size_t li) const { return use_mmq && (layer_mmq.empty() || layer_mmq[li]); }
     std::unique_ptr<MMQ::Context> mctx;
     int32_t *rcnt = nullptr, *rcur = nullptr, *rbounds = nullptr, *rmax = nullptr, *ident = nullptr, *rinv = nullptr;
     void *mq_x = nullptr, *mq_hq = nullptr;
@@ -1277,12 +1283,41 @@ struct Engine {
     uint8_t* acts = nullptr;   // per token: its quantized activation (kNativeActBytes)
     cudaEvent_t ev_route = nullptr;
     uint8_t* stage[2] = {};
+    // A bounded single-token miss buffer; separate from the prompt's
+    // double-buffered stream.
+    int ornith_pcie = 0;
+    int ornith_rebalance = 0;
+    size_t rebalance_next = 0;
+    uint8_t* pcie_stage = nullptr;
+    struct PcieRows {
+        unsigned long long ptr[8];
+        int32_t start[9], dst[8], tok[8], count;
+    };
+    PcieRows* pcie_rows = nullptr;
+    long long pcie_entries = 0;
     cudaStream_t cst = nullptr;
     cudaEvent_t ev_copy[2] = {}, ev_used[2] = {};
     std::vector<int> stream_seq;   // the state indices a streamed forward visits, in order
     int stream_pos = 0;
     long long hy_cpu = 0, hy_gpu = 0, hy_swaps = 0;   // entries computed on the CPU / GPU, slot replacements
     double hy_cpu_ms = 0;
+    // Diagnostic only: synchronized wall times perturb overlap; never use these
+    // runs as throughput results.
+    bool ornith_profile = false;
+    double profile_ms[2][6] = {};
+    unsigned long long stream_h2d = 0, stream_d2d = 0;
+    long long profile_calls[2] = {};
+    void profile_report() const {
+        if (!ornith_profile) return;
+        const char* names[] = {"mixer", "router", "expert_gpu_and_stream_wait", "shared", "cpu_wait_merge", "combine"};
+        for (int phase = 0; phase < 2; ++phase) {
+            std::fprintf(stderr, "ORNITH_PROFILE %s layers=%lld", phase ? "prefill" : "decode", profile_calls[phase]);
+            for (int i = 0; i < 6; ++i)
+                std::fprintf(stderr, " %s_ms=%.3f", names[i], profile_ms[phase][i]);
+            std::fprintf(stderr, "\n");
+        }
+        std::fprintf(stderr, "ORNITH_PROFILE stream_h2d_bytes=%llu stream_d2d_bytes=%llu\n", stream_h2d, stream_d2d);
+    }
     // decode / verify rows: their routing is counted once the rows are kept (commit), so a verify window's rejected
     // drafts never move the slots; the slots follow the counts at every kRebalanceEvery-th position exactly (a
     // window never steps over one), so plain and speculative decoding see the same slot tables at every position
@@ -1355,6 +1390,13 @@ struct Engine {
 
     void init(const Model& model, int ctx_, int tmax_, int n_sessions = 1, bool vision_ = false) {
         m = &model;
+        const char* prof = std::getenv("STRATA_ORNITH_PROFILE");
+        ornith_profile = model.layers[0].L.compatibility && prof && std::strcmp(prof, "1") == 0;
+        if (ornith_profile) use_graph = false; // synchronized diagnostics cannot be captured
+        const char* rb = std::getenv("STRATA_ORNITH_REBALANCE");
+        if (model.layers[0].L.compatibility && rb) ornith_rebalance = std::max(0, std::min(512, std::atoi(rb)));
+        const char* pc = std::getenv("STRATA_ORNITH_PCIE");
+        if (model.layers[0].L.compatibility && pc) ornith_pcie = std::max(0, std::min(8, std::atoi(pc)));
         ctx = ctx_;
         n_sess = std::max(1, std::min(n_sessions, kVerify));
         vision = vision_;
@@ -1388,12 +1430,27 @@ struct Engine {
         v16 = dalloc_t<__half>((size_t) g.n_head_kv * ctx * g.head_dim);
         q16 = dalloc_t<__half>(T * g.n_head * g.head_dim);
         use_mmq = MMQ::built() && std::getenv("STRATA_Q36_NO_MMQ") == nullptr;
+        const char* om = std::getenv("STRATA_ORNITH_MMQ");
+        const bool ornith_mmq = m->layers[0].L.compatibility && om && std::strcmp(om, "1") == 0;
         auto mmq_ok = [&](const Layer& L) {
-            return !L.L.compatibility && MMQ::supported(L.L.gu_type) && MMQ::supported(L.L.d_type) && MMQ::fits(L.L.gu_type, 2 * g.n_ff) &&
-                   MMQ::fits(L.L.d_type, g.n_embd);
+            if (L.L.compatibility) {
+                return ornith_mmq && MMQ::fits(L.L.gu_type, g.n_ff) && MMQ::fits(L.L.u_type, g.n_ff) &&
+                       MMQ::fits(L.L.d_type, g.n_embd);
+            }
+            return MMQ::fits(L.L.gu_type, 2 * g.n_ff) && MMQ::fits(L.L.d_type, g.n_embd);
         };
-        for (const Layer& L : m->layers) use_mmq = use_mmq && mmq_ok(L);
-        if (m->has_mtp) use_mmq = use_mmq && mmq_ok(m->mtp);
+        if (ornith_mmq) {
+            // A rare unsupported layer keeps its grouped path without disabling
+            // all other layers.
+            for (const Layer& L : m->layers)
+                layer_mmq.push_back(use_mmq && mmq_ok(L));
+            if (m->has_mtp) layer_mmq.push_back(use_mmq && mmq_ok(m->mtp));
+            use_mmq = std::any_of(layer_mmq.begin(), layer_mmq.end(), [](bool x) { return x; });
+        } else {
+            for (const Layer& L : m->layers)
+                use_mmq = use_mmq && mmq_ok(L);
+            if (m->has_mtp) use_mmq = use_mmq && mmq_ok(m->mtp);
+        }
         if (use_mmq) {
             const int64_t ne = (int64_t) T * Kp;
             mctx = std::make_unique<MMQ::Context>();
@@ -1898,6 +1955,20 @@ struct Engine {
         const int HK = (int) g.ssm_k_heads, HV = (int) g.ssm_v_heads, D = (int) g.ssm_state_size;
         const int C = (int) g.ssm_conv_channels;
         const int H = (int) g.n_head, HKV = (int) g.n_head_kv, HD = (int) g.head_dim;
+        const bool profiling = ornith_profile && !warming;
+        Clock::time_point pt;
+        if (profiling) {
+            CK(cudaStreamSynchronize(st));
+            pt = Clock::now();
+            ++profile_calls[T > kGemmT];
+        }
+        auto mark = [&](int i) {
+            if (profiling) {
+                CK(cudaStreamSynchronize(st));
+                profile_ms[T > kGemmT][i] += ms_since(pt);
+                pt = Clock::now();
+            }
+        };
         if (!L.attn) {
             float* qkv_b = verify ? v_qkv[li] : qkv;
             float* hc_b = verify ? v_hc[li] : hc;
@@ -2013,6 +2084,7 @@ struct Engine {
             mm(L.wo, att, y, T);
         }
         add_rms_post(L, T);
+        mark(0);
         // routed experts (one token: the router and the shared expert's gate in one product, the gate its last row)
         const bool one = T == 1;
         // a decode batch of up to 8 rows takes the router and the shared expert's gate in one product too (rows of 257) when the fused
@@ -2022,51 +2094,87 @@ struct Engine {
         else f32mm(L.router, h, logits_r, N, (int) g.n_expert, T);
         // the hybrid rows path: a batch of up to hybrid_t rows; when only the MTP block is hybrid, its every batch
         // (its prompt pass too: no staging buffers then)
-        const bool hy_rows = lhy(li) && (T <= hybrid_t || !main_hybrid);
-        const bool mmq_rows = !hy_rows && T > kGemmT && use_mmq;
+        const bool hy_rows = lhy(li) && (T <= hybrid_t || !main_hybrid || !mmq_layer(li));
+        const bool mmq_rows = !hy_rows && T > kGemmT && mmq_layer(li);
         if (!(!mmq_rows && route_group(L, hy_rows ? hy[li].slot_of_d : nullptr, T, ext ? (int) g.n_expert + 1 : (int) g.n_expert)))
             K::native_router_topk(logits_r, ids, ewts, (int) g.n_expert, Kp, T, st);
         const int64_t n_ent = (int64_t) T * Kp;
+        mark(1);
         const int32_t* prow = nullptr;
         if (hy_rows) {
             moe_hybrid_gpu(L, li, T);
-        } else if (T > kGemmT && use_mmq) {
-            // a prompt chunk: the experts on llama.cpp's MMQ (int8, the weights read once per expert): the entries
-            // sorted by expert on the device, gate+up as one [2 FF] product per expert, SwiGLU, down into rows the
-            // combine reads through entry -> sorted row
-            const int ne = (int) g.n_expert;
-            CK(cudaMemsetAsync(rcnt, 0, (size_t) ne * 4, st));
-            k_route_count<<<grid1(n_ent), kThreads, 0, st>>>(ids, (int) n_ent, rcnt);
+        } else if (T > kGemmT && mmq_layer(li)) {
+            // a prompt chunk: the experts on llama.cpp's MMQ (int8, the weights
+            // read once per expert): the entries sorted by expert on the device,
+            // gate+up as one [2 FF] product per expert, SwiGLU, down into rows
+            // the combine reads through entry -> sorted row
+            const int ne = (int)g.n_expert;
+            CK(cudaMemsetAsync(rcnt, 0, (size_t)ne * 4, st));
+            k_route_count<<<grid1(n_ent), kThreads, 0, st>>>(ids, (int)n_ent, rcnt);
             k_route_scan<<<1, 32, 0, st>>>(rcnt, ne, rbounds, rcur, rmax);
-            k_route_scatter<<<grid1(n_ent), kThreads, 0, st>>>(ids, (int) n_ent, Kp, rcur, ent_dst, ent_tok, rinv);
+            k_route_scatter<<<grid1(n_ent), kThreads, 0, st>>>(ids, (int)n_ent, Kp, rcur, ent_dst, ent_tok, rinv);
             CK(cudaMemcpyAsync(hpin + 10, rmax, 4, cudaMemcpyDeviceToHost, st));
-            if (lhy(li)) CK(cudaMemcpyAsync(h_cnt + li * g.n_expert, rcnt, (size_t) ne * 4, cudaMemcpyDeviceToHost, st));
+            if (lhy(li)) CK(cudaMemcpyAsync(h_cnt + li * g.n_expert, rcnt, (size_t)ne * 4, cudaMemcpyDeviceToHost, st));
             CK(cudaStreamSynchronize(st));
             if (lhy(li))
-                for (int x = 0; x < ne; ++x) hy[li].score[(size_t) x] += h_cnt[li * g.n_expert + x];
+                for (int x = 0; x < ne; ++x)
+                    hy[li].score[(size_t)x] += h_cnt[li * g.n_expert + x];
             const int64_t maxr = hpin[10];
-            const uint8_t* wbase = lhy(li) ? stream_take((int) li) : L.blobs;
+            const uint8_t* wbase = lhy(li) ? stream_take((int)li) : L.blobs;
             MMQ::quantize(h, ent_tok, mq_x, L.L.gu_type, N, N, n_ent, st);
             MMQ::Product gu;
-            gu.w = wbase; gu.type = L.L.gu_type; gu.w_rows = 2 * FF; gu.w_cols = N; gu.expert_bytes = L.stride;
-            gu.n = ne; gu.xq = mq_x; gu.bounds = rbounds; gu.ids = ident; gu.total_rows = n_ent; gu.max_rows = maxr;
-            gu.dst = mq_gu; gu.ld_dst = 2 * FF;
-            mctx->run(gu, st);
+            gu.w = wbase;
+            gu.type = L.L.gu_type;
+            gu.w_rows = 2 * FF;
+            gu.w_cols = N;
+            gu.expert_bytes = L.stride;
+            gu.n = ne;
+            gu.xq = mq_x;
+            gu.bounds = rbounds;
+            gu.ids = ident;
+            gu.total_rows = n_ent;
+            gu.max_rows = maxr;
+            gu.dst = mq_gu;
+            gu.ld_dst = 2 * FF;
+            if (L.L.compatibility && L.L.u_type != L.L.gu_type) {
+                gu.w_rows = FF;
+                mctx->run(gu, st);
+                // Q8_1 MMQ activation layouts are weight-type-dependent:
+                // re-quantize for up.
+                MMQ::quantize(h, ent_tok, mq_x, L.L.u_type, N, N, n_ent, st);
+                gu.w = wbase + L.L.up_off;
+                gu.type = L.L.u_type;
+                gu.dst = mq_gu + FF;
+                mctx->run(gu, st);
+            } else {
+                mctx->run(gu, st);
+            }
             MMQ::swiglu(mq_gu, mq_h, n_ent, FF, false, st);
             MMQ::quantize(mq_h, nullptr, mq_hq, L.L.d_type, FF, FF, n_ent, st);
             MMQ::Product dn;
-            dn.w = wbase + L.L.down_off; dn.type = L.L.d_type; dn.w_rows = N; dn.w_cols = FF;
-            dn.expert_bytes = L.stride; dn.n = ne; dn.xq = mq_hq; dn.bounds = rbounds; dn.ids = ident;
-            dn.total_rows = n_ent; dn.max_rows = maxr; dn.dst = eparts; dn.ld_dst = N;
+            dn.w = wbase + L.L.down_off;
+            dn.type = L.L.d_type;
+            dn.w_rows = N;
+            dn.w_cols = FF;
+            dn.expert_bytes = L.stride;
+            dn.n = ne;
+            dn.xq = mq_hq;
+            dn.bounds = rbounds;
+            dn.ids = ident;
+            dn.total_rows = n_ent;
+            dn.max_rows = maxr;
+            dn.dst = eparts;
+            dn.ld_dst = N;
             mctx->run(dn, st);
             if (lhy(li)) stream_done();
             prow = rinv;
         } else {
             group_entries(L, nullptr, T);
-            if (!xq_post) quant(h, N, T, xq);   // the experts' and the shared expert's input
+            if (!xq_post) quant(h, N, T, xq); // the experts' and the shared expert's input
             K::native_expert_grouped(L.L, grp_ptr, grp_start, n_groups, ent_dst, ent_tok,
                                      std::min<int64_t>(n_ent, g.n_expert), n_ent, xq, escr, eparts, st);
         }
+        mark(2);
         // the shared expert, scaled by sigmoid(w . h)
         if (T > kGemmT) k_to_f16<<<grid1((int64_t) N * T), kThreads, 0, st>>>(h, x16, (int64_t) N * T);
         if (T <= kGemmT) {
@@ -2083,9 +2191,12 @@ struct Engine {
             mm(L.sh_down, shh, sy, T);
         }
         if (!ext) f32mm(L.sh_gate_inp, h, sgate, N, 1, T);
+        mark(3);
         if (hy_rows) moe_hybrid_cpu(li, T);   // the CPU pool's experts (while the GPU runs the rest), merged
+        mark(4);
         // the combine, the shared expert's gate, the residual add and the next norm in one launch
         moe_end(T, prow, sy, ext ? logits_r + g.n_expert : sgate, wn, hout, ext ? (int) g.n_expert + 1 : 1);
+        mark(5);
     }
 
     /// The main model over T rows (device `tok`, positions p0 .. p0 + T - 1, also at *pos0): hmain gets every row's
@@ -2097,7 +2208,7 @@ struct Engine {
         if (main_hybrid && T > hybrid_t && use_mmq) {
             std::vector<int> seq;
             for (size_t l = 0; l < m->layers.size(); ++l)
-                if (lhy(l)) seq.push_back((int) l);
+                if (lhy(l) && mmq_layer(l)) seq.push_back((int)l);
             stream_begin(seq);
         }
         K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, tok, T, N, x, st);
@@ -2150,7 +2261,8 @@ struct Engine {
     void forward_mtp(int T, int64_t p0, const float* seeds, bool draft, bool graph_mode) {
         const auto& g = m->g;
         const int N = (int) g.n_embd;
-        if (main_hybrid && lhy(m->layers.size()) && T > hybrid_t && use_mmq) stream_begin({(int) m->layers.size()});
+        if (main_hybrid && lhy(m->layers.size()) && T > hybrid_t && mmq_layer(m->layers.size()))
+            stream_begin({(int)m->layers.size()});
         K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, tok_m, T, N, y, st);
         if (map_on) k_put_rows<<<T, kThreads, 0, st>>>(y, d_img, d_map, N);
         k_rms_ld<<<T, kThreads, 0, st>>>(y, N, m->mtp_enorm, mtp_cat, 2 * N, N, m->eps);              // [e | ...]
@@ -2197,7 +2309,8 @@ struct Engine {
         // fewer than half the experts resident (a 12 GB card): the one whole-layer copy is faster than many small ones
         // (RTX 3060, UD-Q4_K_XL at 37 of 256: pp2048 1970 whole vs 1540 in runs)
         if (all || 2 * L.n_slots < ne) {
-            CK(cudaMemcpyAsync(stage[b], L.hblobs, L.stride * (size_t) ne, cudaMemcpyHostToDevice, cst));
+            if (ornith_profile && !warming) stream_h2d += L.stride * (size_t)ne;
+            CK(cudaMemcpyAsync(stage[b], L.hblobs, L.stride * (size_t)ne, cudaMemcpyHostToDevice, cst));
         } else {
             for (int x = 0; x < ne;) {
                 const bool dev = H.slot_of[(size_t) x] >= 0;
@@ -2207,6 +2320,7 @@ struct Engine {
                 else
                     while (y < ne && H.slot_of[(size_t) y] < 0) ++y;
                 const size_t n = (size_t) (y - x) * L.stride;
+                if (ornith_profile && !warming) (dev ? stream_d2d : stream_h2d) += n;
                 if (dev)
                     CK(cudaMemcpyAsync(stage[b] + (size_t) x * L.stride, L.blobs + (size_t) H.slot_of[(size_t) x] * L.stride,
                                        n, cudaMemcpyDeviceToDevice, cst));
@@ -2263,7 +2377,7 @@ struct Engine {
         // the missed entries per expert (up to MAXT tokens per job)
         jobs.clear();
         std::vector<char> quantized((size_t) T, 0);
-        int n_miss = 0;
+        int n_miss = 0, n_pcie = 0;
         std::map<int, size_t> open;   // expert -> its job with room
         const bool defer = rows_deferred && li < m->layers.size();
         if (defer) {
@@ -2275,6 +2389,19 @@ struct Engine {
             if (!defer) H.score[(size_t) x] += 1.0;
             h_miss[e] = H.slot_of[(size_t) x] < 0;
             if (!h_miss[e]) continue;
+            if (T == 1 && n_pcie < ornith_pcie) {
+                // The previous layer's stream has passed ev_route before these
+                // pinned words are reused.
+                auto* target = pcie_stage + (size_t)n_pcie * L.stride;
+                CK(cudaMemcpyAsync(target, L.hblobs + (size_t)x * L.stride, L.L.bytes, cudaMemcpyHostToDevice, st));
+                pcie_rows->ptr[n_pcie] = (unsigned long long)target;
+                pcie_rows->start[n_pcie] = n_pcie;
+                pcie_rows->dst[n_pcie] = e;
+                pcie_rows->tok[n_pcie] = 0;
+                ++n_pcie;
+                h_miss[e] = 0;
+                continue;
+            }
             ++n_miss;
             const int t = e / Kp;
             if (!quantized[(size_t) t]) {
@@ -2292,6 +2419,19 @@ struct Engine {
             j.nact[j.nt] = acts + (size_t) t * C::kNativeActBytes;
             j.out[j.nt] = cpu_out + (size_t) e * N;
             ++j.nt;
+        }
+        if (n_pcie) {
+            pcie_rows->count = n_pcie;
+            pcie_rows->start[n_pcie] = n_pcie;
+            CK(cudaMemcpyAsync(grp_ptr, pcie_rows->ptr, n_pcie * sizeof(unsigned long long), cudaMemcpyHostToDevice,
+                               st));
+            CK(cudaMemcpyAsync(grp_start, pcie_rows->start, (n_pcie + 1) * 4, cudaMemcpyHostToDevice, st));
+            CK(cudaMemcpyAsync(n_groups, &pcie_rows->count, 4, cudaMemcpyHostToDevice, st));
+            CK(cudaMemcpyAsync(ent_dst, pcie_rows->dst, n_pcie * 4, cudaMemcpyHostToDevice, st));
+            CK(cudaMemcpyAsync(ent_tok, pcie_rows->tok, n_pcie * 4, cudaMemcpyHostToDevice, st));
+            K::native_expert_grouped(L.L, grp_ptr, grp_start, n_groups, ent_dst, ent_tok, n_pcie, n_ent, xq, escr,
+                                     eparts, st);
+            pcie_entries += n_pcie;
         }
         hy_cpu += n_miss;
         hy_gpu += n_ent - n_miss;
@@ -2313,8 +2453,13 @@ struct Engine {
         static const bool off = std::getenv("STRATA_Q36_FIXED_SLOTS") != nullptr;   // the slots as placed (tests)
         if (!m->hybrid || off || warming) return;
         const int64_t ne = m->g.n_expert;
+        const bool rotate = ornith_rebalance && max_swaps == 8;
+        if (rotate) max_swaps = ornith_rebalance;
         int left = max_swaps;
-        for (size_t li = 0; li < hy.size() && left > 0; ++li) {
+        const size_t first = rotate ? rebalance_next : 0;
+        for (size_t i = 0; i < hy.size() && left > 0; ++i) {
+            const size_t li = (first + i) % hy.size();
+            if (rotate) rebalance_next = (li + 1) % hy.size();
             Hy& H = hy[li];
             const Layer& L = layer_at((int) li);
             const int S = L.n_slots;
@@ -2353,8 +2498,17 @@ struct Engine {
             }
             if (changed)
                 CK(cudaMemcpyAsync(H.slot_of_d, H.slot_of.data(), (size_t) ne * 4, cudaMemcpyHostToDevice, st));
-            for (double& v : H.score) v *= 0.5;
+            if (!ornith_rebalance)
+                for (double& v : H.score)
+                    v *= 0.5;
         }
+        // With a rotating budget, age every layer consistently even if earlier
+        // layers consumed this round's copy allowance. Default scheduling and
+        // score arithmetic remain unchanged without the opt-in flag.
+        if (ornith_rebalance)
+            for (Hy& H : hy)
+                for (double& v : H.score)
+                    v *= 0.5;
         CK(cudaStreamSynchronize(st));   // slot_of's host copy is pageable: the upload is done before it changes
     }
 
@@ -2785,6 +2939,7 @@ struct Engine {
         warming = false;
         for (Hy& H : hy) std::fill(H.score.begin(), H.score.end(), 0.0);
         hy_cpu = hy_gpu = hy_swaps = 0;
+        pcie_entries = 0;
         hy_cpu_ms = 0;
         reset();
         std::fprintf(stderr, "strata-q36: warmed up in %.1f s (one prompt chunk, a decode step%s)\n",
@@ -2906,9 +3061,22 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     E.mtp_graph = false;                      // the MTP block's layer is hybrid either way
     E.hybrid_t = std::max(1, std::min(hybrid_t, E.use_mmq ? E.tmax : E.tmax));
     if (!E.use_mmq) E.hybrid_t = E.tmax;   // no streamed prompt path: every batch on slots + the pool
-    const size_t staging = E.use_mmq && E.main_hybrid ? 2 * (max_layer + kMmqTail) : 0;
-    size_t slot_bytes = budget2 > staging ? budget2 - staging : 0;
-    if (slot_bytes + staging + ((size_t) 256 << 20) > fr) slot_bytes = fr > staging + ((size_t) 512 << 20) ? fr - staging - ((size_t) 512 << 20) : 0;
+    size_t stream_layer = max_layer;
+    if (!E.layer_mmq.empty()) {
+        // Ornith's disabled MTP block can be much larger than every main
+        // layer. Keep its weights/cache placement, but do not reserve prompt
+        // staging for a layer that cannot run. Enabled MTP remains covered.
+        stream_layer = 0;
+        for (size_t li = 0; li < all.size(); ++li)
+            if (E.mmq_layer(li) && (li < m.layers.size() || E.mtp_d > 0))
+                stream_layer = std::max(stream_layer, all[li]->stride * (size_t)ne);
+    }
+    const size_t staging = E.use_mmq && E.main_hybrid ? 2 * (stream_layer + kMmqTail) : 0;
+    const size_t pcie_bytes = E.ornith_pcie ? (max_layer / (size_t)ne) * E.ornith_pcie + kMmqTail : 0;
+    const size_t buffers = staging + pcie_bytes;
+    size_t slot_bytes = budget2 > buffers ? budget2 - buffers : 0;
+    if (slot_bytes + buffers + ((size_t)256 << 20) > fr)
+        slot_bytes = fr > buffers + ((size_t)512 << 20) ? fr - buffers - ((size_t)512 << 20) : 0;
     // --expert-slots: that many per layer (tests: the same split with and without the MTP block)
     int S = slots > 0 ? (int) std::min<int64_t>(ne, slots) : (int) std::min<size_t>((size_t) ne, slot_bytes / per_slot);
     if (mtp_only) {   // the main layers all, the MTP block what is left
@@ -2918,7 +3086,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     {   // what the hybrid mode allocates next (the staging pair, the CPU part's outputs, the slots) against the VRAM the
         // sessions and the context left: said with the numbers instead of a cudaMalloc failure (8 slots on a 12 GB card)
         const size_t Tn = (size_t) E.tmax, Nn = (size_t) g.n_embd, Kn = (size_t) m.top_k;
-        size_t need = staging + Tn * Kn * Nn * 4 + Tn * Kn * 4;
+        size_t need = buffers + Tn * Kn * Nn * 4 + Tn * Kn * 4;
         for (Layer* L : all) {
             if (mtp_only && L != &m.mtp) need += L->stride * (size_t) ne + kMmqTail;
             else need += (S > 0 ? (size_t) S * L->stride + kMmqTail : 0);
@@ -2999,12 +3167,24 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     if (staging) {
         CK(cudaStreamCreateWithFlags(&E.cst, cudaStreamNonBlocking));
         for (int b = 0; b < 2; ++b) {
-            CK(cudaMalloc(&E.stage[b], max_layer + kMmqTail));
-            CK(cudaMemset(E.stage[b], 0, max_layer + kMmqTail));
+            CK(cudaMalloc(&E.stage[b], stream_layer + kMmqTail));
+            CK(cudaMemset(E.stage[b], 0, stream_layer + kMmqTail));
             CK(cudaEventCreateWithFlags(&E.ev_copy[b], cudaEventDisableTiming));
             CK(cudaEventCreateWithFlags(&E.ev_used[b], cudaEventDisableTiming));
             CK(cudaEventRecord(E.ev_used[b], E.st));
         }
+    }
+    if (E.ornith_pcie && pinned) {
+        CK(cudaMalloc(&E.pcie_stage, pcie_bytes));
+        CK(cudaHostAlloc((void**)&E.pcie_rows, sizeof(Engine::PcieRows), cudaHostAllocDefault));
+        std::fprintf(stderr,
+                     "strata-q36: Ornith decode sends at most %d missed experts "
+                     "per layer over PCIe (%.1f MiB staging)\n",
+                     E.ornith_pcie, (double)pcie_bytes / (1 << 20));
+    } else if (E.ornith_pcie) {
+        E.ornith_pcie = 0;
+        std::fprintf(stderr, "strata-q36: Ornith PCIe decode disabled: expert "
+                             "host memory is not pinned\n");
     }
     E.pool = std::make_unique<C::ExpertPool>(threads);
     CK(cudaDeviceSynchronize());
@@ -3874,6 +4054,7 @@ int strata::qwen35::run(int argc, char** argv) {
             std::fprintf(stderr, "strata-q36: chunk rule: free %.2f GiB (raw %.2f, with %.2f packed), main experts %.2f GiB, chunk %d\n",
                          fr / 1073741824.0, fr_raw / 1073741824.0, packed / 1073741824.0, experts / 1073741824.0, chunk);
     }
+    E.mtp_d = m.has_mtp ? mtp_d : 0;
     E.init(m, ctx, chunk, batch, vision);
     if (!place_experts(m, E, expert_vram, cpu_threads, hybrid_rows, expert_slots, err)) {
         std::fprintf(stderr, "strata-q36: %s\n", err.c_str());
@@ -3882,15 +4063,23 @@ int strata::qwen35::run(int argc, char** argv) {
     struct Report {
         Engine& E;
         ~Report() {
-            if (E.verify_k) std::fprintf(stderr, "strata-q36 VERIFY: %lld comparisons, %lld mismatches\n", E.v_calls, E.v_bad);
+#if !defined(__HIPCC__)
+            if (E.m->layers[0].L.compatibility && std::getenv("STRATA_ORNITH_TRACE")) (void)cudaProfilerStop();
+#endif
+            E.profile_report();
+            if (E.ornith_pcie) std::fprintf(stderr, "strata-q36: Ornith PCIe decode entries %lld\n", E.pcie_entries);
+            if (E.verify_k)
+                std::fprintf(stderr, "strata-q36 VERIFY: %lld comparisons, %lld mismatches\n", E.v_calls, E.v_bad);
             if (E.verify_k)
                 for (const auto& kv : E.v_by)
                     std::fprintf(stderr, "strata-q36 VERIFY   %s: %lld mismatches\n", kv.first.c_str(), kv.second);
             if (!E.m->hybrid) return;
             const long long n = E.hy_cpu + E.hy_gpu;
-            std::fprintf(stderr, "strata-q36: hybrid experts: %lld of %lld batch entries on the GPU (%.1f%%), %lld on the "
-                         "CPU pool in %.0f ms, %lld slot replacements\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
-                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps);
+            std::fprintf(stderr,
+                         "strata-q36: hybrid experts: %lld of %lld batch entries "
+                         "on the GPU (%.1f%%), %lld on the "
+                         "CPU pool in %.0f ms, %lld slot replacements\n",
+                         E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0, E.hy_cpu, E.hy_cpu_ms, E.hy_swaps);
         }
     } report{E};
     E.reset();
@@ -3900,6 +4089,11 @@ int strata::qwen35::run(int argc, char** argv) {
     E.bmtp = (batch_mtp || (std::getenv("STRATA_BATCH_MTP") != nullptr && std::string(std::getenv("STRATA_BATCH_MTP")) != "0")) && E.n_sess > 1 && E.mtp_d > 0;
     if (batch_mtp && !E.bmtp) std::fprintf(stderr, "strata-q36: --batch-mtp needs --batch N (2 or more) and --mtp N: ignored\n");
     if (warm) E.warmup();
+#if !defined(__HIPCC__)
+    // Nsight capture starts after model loading and engine warm-up. No effect
+    // without the opt-in flag.
+    if (m.layers[0].L.compatibility && std::getenv("STRATA_ORNITH_TRACE")) (void)cudaProfilerStart();
+#endif
     if (serve_mode) return serve(E);
     if (bench_pp > 0 || bench_tg > 0) {
         // llama-bench's shapes: a prompt of bench_pp tokens from a fresh state, then bench_tg tokens one at a time

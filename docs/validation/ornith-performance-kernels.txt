@@ -1,0 +1,700 @@
+Final CUDA numerical checks, 2026-10-21. Full-model checks are recorded separately.
+
+Start testing: Oct 21 05:38 UTC
+----------------------------------------------------------
+49/152 Testing: native_grouped_parity
+49/152 Test: native_grouped_parity
+Command: "$BUILD/native_grouped_parity"
+Directory: $BUILD
+"native_grouped_parity" start time: Oct 21 05:38 UTC
+Output:
+----------------------------------------------------------
+IQ2_XXS /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (76800 output floats written in all)
+IQ2_XXS /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (83968 output floats written in all)
+IQ2_XXS /Q2_0      512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+IQ2_XXS /Q5_1      512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+IQ2_XXS /Q8_0      512 x  256  84 calls: bitwise equal to v1 (80896 output floats written in all)
+IQ2_XS  /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (80896 output floats written in all)
+IQ2_XS  /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (83968 output floats written in all)
+IQ2_XS  /Q2_0      512 x  256  84 calls: bitwise equal to v1 (80896 output floats written in all)
+IQ2_XS  /Q5_1      512 x  256  84 calls: bitwise equal to v1 (75776 output floats written in all)
+IQ2_XS  /Q8_0      512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+IQ3_XXS /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (78336 output floats written in all)
+IQ3_XXS /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+IQ3_XXS /Q2_0      512 x  256  84 calls: bitwise equal to v1 (76288 output floats written in all)
+IQ3_XXS /Q5_1      512 x  256  84 calls: bitwise equal to v1 (77312 output floats written in all)
+IQ3_XXS /Q8_0      512 x  256  84 calls: bitwise equal to v1 (76288 output floats written in all)
+IQ3_S   /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (79360 output floats written in all)
+IQ3_S   /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (79872 output floats written in all)
+IQ3_S   /Q2_0      512 x  256  84 calls: bitwise equal to v1 (77824 output floats written in all)
+IQ3_S   /Q5_1      512 x  256  84 calls: bitwise equal to v1 (87552 output floats written in all)
+IQ3_S   /Q8_0      512 x  256  84 calls: bitwise equal to v1 (83968 output floats written in all)
+IQ2_S   /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (80896 output floats written in all)
+IQ2_S   /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (79360 output floats written in all)
+IQ2_S   /Q2_0      512 x  256  84 calls: bitwise equal to v1 (75776 output floats written in all)
+IQ2_S   /Q5_1      512 x  256  84 calls: bitwise equal to v1 (81920 output floats written in all)
+IQ2_S   /Q8_0      512 x  256  84 calls: bitwise equal to v1 (82944 output floats written in all)
+IQ4_XS  /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (79872 output floats written in all)
+IQ4_XS  /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (82432 output floats written in all)
+IQ4_XS  /Q2_0      512 x  256  84 calls: bitwise equal to v1 (84992 output floats written in all)
+IQ4_XS  /Q5_1      512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+IQ4_XS  /Q8_0      512 x  256  84 calls: bitwise equal to v1 (74752 output floats written in all)
+IQ1_M   /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (81408 output floats written in all)
+IQ1_M   /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (81920 output floats written in all)
+IQ1_M   /Q2_0      512 x  256  84 calls: bitwise equal to v1 (74752 output floats written in all)
+IQ1_M   /Q5_1      512 x  256  84 calls: bitwise equal to v1 (78336 output floats written in all)
+IQ1_M   /Q8_0      512 x  256  84 calls: bitwise equal to v1 (83968 output floats written in all)
+Q2_0    /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (83456 output floats written in all)
+Q2_0    /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (73216 output floats written in all)
+Q2_0    /Q2_0      512 x  256  84 calls: bitwise equal to v1 (82944 output floats written in all)
+Q2_0    /Q5_1      512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+Q2_0    /Q8_0      512 x  256  84 calls: bitwise equal to v1 (79872 output floats written in all)
+Q4_K    /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (77312 output floats written in all)
+Q4_K    /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (73216 output floats written in all)
+Q4_K    /Q2_0      512 x  256  84 calls: bitwise equal to v1 (73728 output floats written in all)
+Q4_K    /Q5_1      512 x  256  84 calls: bitwise equal to v1 (75776 output floats written in all)
+Q4_K    /Q8_0      512 x  256  84 calls: bitwise equal to v1 (86016 output floats written in all)
+Q5_K    /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (69632 output floats written in all)
+Q5_K    /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (78848 output floats written in all)
+Q5_K    /Q2_0      512 x  256  84 calls: bitwise equal to v1 (76800 output floats written in all)
+Q5_K    /Q5_1      512 x  256  84 calls: bitwise equal to v1 (84480 output floats written in all)
+Q5_K    /Q8_0      512 x  256  84 calls: bitwise equal to v1 (74240 output floats written in all)
+Q6_K    /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (88576 output floats written in all)
+Q6_K    /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (76288 output floats written in all)
+Q6_K    /Q2_0      512 x  256  84 calls: bitwise equal to v1 (80384 output floats written in all)
+Q6_K    /Q5_1      512 x  256  84 calls: bitwise equal to v1 (81408 output floats written in all)
+Q6_K    /Q8_0      512 x  256  84 calls: bitwise equal to v1 (81408 output floats written in all)
+Q8_0    /IQ4_NL    512 x  256  84 calls: bitwise equal to v1 (75776 output floats written in all)
+Q8_0    /IQ4_XS    512 x  256  84 calls: bitwise equal to v1 (74752 output floats written in all)
+Q8_0    /Q2_0      512 x  256  84 calls: bitwise equal to v1 (81920 output floats written in all)
+Q8_0    /Q5_1      512 x  256  84 calls: bitwise equal to v1 (76800 output floats written in all)
+Q8_0    /Q8_0      512 x  256  84 calls: bitwise equal to v1 (86016 output floats written in all)
+Q2_0    /Q2_0     2560 x  640  84 calls: bitwise equal to v1 (414720 output floats written in all)
+IQ3_S   /IQ4_NL   2560 x  640  84 calls: bitwise equal to v1 (419840 output floats written in all)
+IQ3_S   /IQ4_XS   2560 x  768  84 calls: bitwise equal to v1 (396800 output floats written in all)
+native_grouped_parity: 0 failures
+<end of output>
+Test time =   1.35 sec
+----------------------------------------------------------
+Test Passed.
+"native_grouped_parity" end time: Oct 21 05:38 UTC
+"native_grouped_parity" time elapsed: 00:00:01
+----------------------------------------------------------
+
+112/152 Testing: ornith_parity
+112/152 Test: ornith_parity
+Command: "$BUILD/ornith_parity"
+Directory: $BUILD
+"ornith_parity" start time: Oct 21 05:38 UTC
+Output:
+----------------------------------------------------------
+types 19/19/10
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=19/19/10 entries=1 ms=0.087398
+GPU gate relative L2 5.3618381e-08 max 9.5367432e-07
+GPU up relative L2 5.3618381e-08 max 9.5367432e-07
+GPU down relative L2 3.1971046e-07 max 5.9604645e-07
+GPU grouped multi-token relative L2 0 max 0
+types 11/11/11
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=11/11/11 entries=1 ms=0.102901
+GPU gate relative L2 5.4624947e-08 max 9.5367432e-07
+GPU up relative L2 5.4624947e-08 max 9.5367432e-07
+GPU down relative L2 3.2066448e-07 max 3.5762787e-07
+GPU grouped multi-token relative L2 0 max 0
+types 12/13/13
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=12/13/13 entries=1 ms=0.087654
+GPU gate relative L2 5.2861745e-08 max 9.5367432e-07
+GPU up relative L2 5.3809686e-08 max 9.5367432e-07
+GPU down relative L2 3.9739006e-07 max 3.5762787e-07
+GPU grouped multi-token relative L2 0 max 0
+types 18/18/22
+CPU pool token 0 relative L2 6.7530035e-07 max 7.1525574e-07
+CPU pool token 1 relative L2 6.7530035e-07 max 7.1525574e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=18/18/22 entries=1 ms=0.076442
+GPU gate relative L2 5.1864322e-08 max 9.5367432e-07
+GPU up relative L2 5.1864322e-08 max 9.5367432e-07
+GPU down relative L2 2.8629304e-07 max 4.1723251e-07
+GPU grouped multi-token relative L2 0 max 0
+types 21/21/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=21/21/18 entries=1 ms=0.074240
+GPU gate relative L2 5.1925438e-08 max 9.5367432e-07
+GPU up relative L2 5.1925438e-08 max 9.5367432e-07
+GPU down relative L2 3.1700486e-07 max 5.2154064e-07
+GPU grouped multi-token relative L2 0 max 0
+types 16/16/10
+CPU pool token 0 relative L2 1.9032857e-06 max 1.9073486e-06
+CPU pool token 1 relative L2 1.9032857e-06 max 1.9073486e-06
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=16/16/10 entries=1 ms=0.086363
+GPU gate relative L2 5.4812835e-08 max 9.5367432e-07
+GPU up relative L2 5.4812835e-08 max 9.5367432e-07
+GPU down relative L2 3.3863024e-07 max 3.5762787e-07
+GPU grouped multi-token relative L2 0 max 0
+types 22/22/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=22/22/18 entries=1 ms=0.082646
+GPU gate relative L2 5.4452943e-08 max 9.5367432e-07
+GPU up relative L2 5.4452943e-08 max 9.5367432e-07
+GPU down relative L2 3.0899896e-07 max 4.1723251e-07
+GPU grouped multi-token relative L2 0 max 0
+types 18/18/23
+CPU pool token 0 relative L2 7.5160159e-07 max 4.7683716e-07
+CPU pool token 1 relative L2 7.5160159e-07 max 4.7683716e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=18/18/23 entries=1 ms=0.079514
+GPU gate relative L2 5.1864322e-08 max 9.5367432e-07
+GPU up relative L2 5.1864322e-08 max 9.5367432e-07
+GPU down relative L2 3.5958712e-07 max 4.1723251e-07
+GPU grouped multi-token relative L2 0 max 0
+types 8/8/8
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=8/8/8 entries=1 ms=0.091341
+GPU gate relative L2 5.3401238e-08 max 9.5367432e-07
+GPU up relative L2 5.3401238e-08 max 9.5367432e-07
+GPU down relative L2 4.1684257e-07 max 3.8743019e-07
+GPU grouped multi-token relative L2 0 max 0
+Ornith expert parity passed
+<end of output>
+Test time =  28.40 sec
+----------------------------------------------------------
+Test Passed.
+"ornith_parity" end time: Oct 21 05:39 UTC
+"ornith_parity" time elapsed: 00:00:28
+----------------------------------------------------------
+
+113/152 Testing: ornith_integer_parity
+113/152 Test: ornith_integer_parity
+Command: "$BUILD/ornith_parity"
+Directory: $BUILD
+"ornith_integer_parity" start time: Oct 21 05:39 UTC
+Output:
+----------------------------------------------------------
+types 19/19/10
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=19/19/10 entries=1 ms=0.016554
+GPU gate relative L2 4.8058304e-08 max 9.5367432e-07
+GPU up relative L2 4.8058304e-08 max 9.5367432e-07
+GPU down relative L2 8.3110848e-07 max 1.385808e-06
+GPU grouped multi-token relative L2 0 max 0
+types 11/11/11
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=11/11/11 entries=1 ms=0.024934
+GPU gate relative L2 4.5620664e-08 max 4.7683716e-07
+GPU up relative L2 4.5620664e-08 max 4.7683716e-07
+GPU down relative L2 7.8974767e-07 max 8.8661909e-07
+GPU grouped multi-token relative L2 0 max 0
+types 12/13/13
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=12/13/13 entries=1 ms=0.019043
+GPU gate relative L2 4.9029415e-08 max 4.7683716e-07
+GPU up relative L2 4.6579398e-08 max 4.7683716e-07
+GPU down relative L2 1.2926722e-06 max 1.1324883e-06
+GPU grouped multi-token relative L2 0 max 0
+types 18/18/22
+CPU pool token 0 relative L2 6.7530035e-07 max 7.1525574e-07
+CPU pool token 1 relative L2 6.7530035e-07 max 7.1525574e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=18/18/22 entries=1 ms=0.018022
+GPU gate relative L2 4.80154e-08 max 4.7683716e-07
+GPU up relative L2 4.80154e-08 max 4.7683716e-07
+GPU down relative L2 3.3486984e-07 max 5.2154064e-07
+GPU grouped multi-token relative L2 0 max 0
+types 21/21/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=21/21/18 entries=1 ms=0.018432
+GPU gate relative L2 4.8167419e-08 max 4.7683716e-07
+GPU up relative L2 4.8167419e-08 max 4.7683716e-07
+GPU down relative L2 1.81718e-06 max 4.3506734e-06
+GPU grouped multi-token relative L2 0 max 0
+types 16/16/10
+CPU pool token 0 relative L2 1.9032857e-06 max 1.9073486e-06
+CPU pool token 1 relative L2 1.9032857e-06 max 1.9073486e-06
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=16/16/10 entries=1 ms=0.017362
+GPU gate relative L2 4.8166983e-08 max 4.7683716e-07
+GPU up relative L2 4.8166983e-08 max 4.7683716e-07
+GPU down relative L2 9.5168189e-07 max 1.0840595e-06
+GPU grouped multi-token relative L2 0 max 0
+types 22/22/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=22/22/18 entries=1 ms=0.018176
+GPU gate relative L2 4.5102402e-08 max 4.7683716e-07
+GPU up relative L2 4.5102402e-08 max 4.7683716e-07
+GPU down relative L2 1.8135804e-06 max 4.4107437e-06
+GPU grouped multi-token relative L2 0 max 0
+types 18/18/23
+CPU pool token 0 relative L2 7.5160159e-07 max 4.7683716e-07
+CPU pool token 1 relative L2 7.5160159e-07 max 4.7683716e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=18/18/23 entries=1 ms=0.017600
+GPU gate relative L2 4.80154e-08 max 4.7683716e-07
+GPU up relative L2 4.80154e-08 max 4.7683716e-07
+GPU down relative L2 4.2792489e-07 max 4.61936e-07
+GPU grouped multi-token relative L2 0 max 0
+types 8/8/8
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=8/8/8 entries=1 ms=0.027226
+GPU gate relative L2 4.6980738e-08 max 4.7683716e-07
+GPU up relative L2 4.6980738e-08 max 4.7683716e-07
+GPU down relative L2 7.5842057e-07 max 7.9162419e-07
+GPU grouped multi-token relative L2 0 max 0
+Ornith expert parity passed
+<end of output>
+Test time =  27.93 sec
+----------------------------------------------------------
+Test Passed.
+"ornith_integer_parity" end time: Oct 21 05:39 UTC
+"ornith_integer_parity" time elapsed: 00:00:27
+----------------------------------------------------------
+
+126/152 Testing: ornith_mmq_test
+126/152 Test: ornith_mmq_test
+Command: "$BUILD/ornith_mmq_test"
+Directory: $BUILD
+"ornith_mmq_test" start time: Oct 21 05:39 UTC
+Output:
+----------------------------------------------------------
+strata: K-quant prompt kernels from $BUILD/libstrata_kq.so (STRATA_MMQ_KQ=1)
+TIMING iq1_s-0 gate/up rows=4 mmq_ms=0.01544 fp16_dequant_gemm_ms=0.05024
+FP16_REFERENCE iq1_s-0 gate/up relative_l2=0.000385435
+iq1_s-0 gate/up        rows  4 experts 3  ref_rms 0.6361  rel_l2 0.00072  max/rms 0.0033  zero row 0
+TIMING iq1_s-0 down rows=4 mmq_ms=0.01505 fp16_dequant_gemm_ms=0.05622
+FP16_REFERENCE iq1_s-0 down relative_l2=0.000347446
+iq1_s-0 down           rows  4 experts 3  ref_rms 0.384  rel_l2 0.00068  max/rms 0.0031  zero row 0
+TIMING q2_K-0 gate/up rows=4 mmq_ms=0.01587 fp16_dequant_gemm_ms=0.05110
+FP16_REFERENCE q2_K-0 gate/up relative_l2=0.000724059
+q2_K-0 gate/up         rows  4 experts 3  ref_rms 0.3938  rel_l2 0.00098  max/rms 0.0051  zero row 0
+TIMING q2_K-0 down rows=4 mmq_ms=0.01576 fp16_dequant_gemm_ms=0.05755
+FP16_REFERENCE q2_K-0 down relative_l2=0.000468329
+q2_K-0 down            rows  4 experts 3  ref_rms 0.3498  rel_l2 0.00059  max/rms 0.0027  zero row 0
+TIMING q3_K-0 gate/up rows=4 mmq_ms=0.01728 fp16_dequant_gemm_ms=0.05489
+FP16_REFERENCE q3_K-0 gate/up relative_l2=0.000806006
+q3_K-0 gate/up         rows  4 experts 3  ref_rms 0.3558  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q3_K-0 down rows=4 mmq_ms=0.01708 fp16_dequant_gemm_ms=0.06110
+FP16_REFERENCE q3_K-0 down relative_l2=0.000536915
+q3_K-0 down            rows  4 experts 3  ref_rms 0.3065  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q4_K-0 gate/up rows=4 mmq_ms=0.01524 fp16_dequant_gemm_ms=0.04608
+FP16_REFERENCE q4_K-0 gate/up relative_l2=0.000921212
+q4_K-0 gate/up         rows  4 experts 3  ref_rms 0.3126  rel_l2 0.00145  max/rms 0.0057  zero row 0
+TIMING q4_K-0 down rows=4 mmq_ms=0.01546 fp16_dequant_gemm_ms=0.05233
+FP16_REFERENCE q4_K-0 down relative_l2=0.000560515
+q4_K-0 down            rows  4 experts 3  ref_rms 0.2991  rel_l2 0.00089  max/rms 0.0039  zero row 0
+TIMING q5_K-0 gate/up rows=4 mmq_ms=0.01586 fp16_dequant_gemm_ms=0.05612
+FP16_REFERENCE q5_K-0 gate/up relative_l2=0.000925075
+q5_K-0 gate/up         rows  4 experts 3  ref_rms 0.3111  rel_l2 0.00121  max/rms 0.0046  zero row 0
+TIMING q5_K-0 down rows=4 mmq_ms=0.01616 fp16_dequant_gemm_ms=0.06277
+FP16_REFERENCE q5_K-0 down relative_l2=0.000563193
+q5_K-0 down            rows  4 experts 3  ref_rms 0.295  rel_l2 0.00079  max/rms 0.0040  zero row 0
+TIMING iq3_xxs-0 gate/up rows=4 mmq_ms=0.01802 fp16_dequant_gemm_ms=0.04803
+FP16_REFERENCE iq3_xxs-0 gate/up relative_l2=0.000753615
+iq3_xxs-0 gate/up      rows  4 experts 3  ref_rms 0.3617  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_xxs-0 down rows=4 mmq_ms=0.01782 fp16_dequant_gemm_ms=0.05509
+FP16_REFERENCE iq3_xxs-0 down relative_l2=0.000474048
+iq3_xxs-0 down         rows  4 experts 3  ref_rms 0.3313  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-0 gate/up rows=4 mmq_ms=0.01720 fp16_dequant_gemm_ms=0.04741
+FP16_REFERENCE iq2_xxs-0 gate/up relative_l2=0.000421782
+iq2_xxs-0 gate/up      rows  4 experts 3  ref_rms 0.6085  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-0 down rows=4 mmq_ms=0.01708 fp16_dequant_gemm_ms=0.05407
+FP16_REFERENCE iq2_xxs-0 down relative_l2=0.000392086
+iq2_xxs-0 down         rows  4 experts 3  ref_rms 0.3796  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-0 gate/up rows=4 mmq_ms=0.01749 fp16_dequant_gemm_ms=0.04884
+FP16_REFERENCE iq2_s-0 gate/up relative_l2=0.000666825
+iq2_s-0 gate/up        rows  4 experts 3  ref_rms 0.3863  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-0 down rows=4 mmq_ms=0.01741 fp16_dequant_gemm_ms=0.05557
+FP16_REFERENCE iq2_s-0 down relative_l2=0.000437321
+iq2_s-0 down           rows  4 experts 3  ref_rms 0.3369  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-0 gate/up rows=4 mmq_ms=0.01872 fp16_dequant_gemm_ms=0.04803
+FP16_REFERENCE iq3_s-0 gate/up relative_l2=0.000740639
+iq3_s-0 gate/up        rows  4 experts 3  ref_rms 0.3544  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-0 down rows=4 mmq_ms=0.01833 fp16_dequant_gemm_ms=0.05496
+FP16_REFERENCE iq3_s-0 down relative_l2=0.00048091
+iq3_s-0 down           rows  4 experts 3  ref_rms 0.3242  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-0 gate/up rows=4 mmq_ms=0.01556 fp16_dequant_gemm_ms=0.04844
+FP16_REFERENCE iq4_xs-0 gate/up relative_l2=0.000861334
+iq4_xs-0 gate/up       rows  4 experts 3  ref_rms 0.3181  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-0 down rows=4 mmq_ms=0.01546 fp16_dequant_gemm_ms=0.05509
+FP16_REFERENCE iq4_xs-0 down relative_l2=0.000541718
+iq4_xs-0 down          rows  4 experts 3  ref_rms 0.3001  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-0 gate/up rows=4 mmq_ms=0.02007 fp16_dequant_gemm_ms=0.04751
+FP16_REFERENCE q8_0-0 gate/up relative_l2=0.000909506
+q8_0-0 gate/up         rows  4 experts 3  ref_rms 0.3096  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-0 down rows=4 mmq_ms=0.02068 fp16_dequant_gemm_ms=0.05335
+FP16_REFERENCE q8_0-0 down relative_l2=0.00056515
+q8_0-0 down            rows  4 experts 3  ref_rms 0.2956  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq1_s-1 gate/up rows=25 mmq_ms=0.01995 fp16_dequant_gemm_ms=0.05500
+FP16_REFERENCE iq1_s-1 gate/up relative_l2=0.000362115
+iq1_s-1 gate/up        rows 25 experts 3  ref_rms 0.7208  rel_l2 0.00070  max/rms 0.0029  zero row 0
+TIMING iq1_s-1 down rows=25 mmq_ms=0.01984 fp16_dequant_gemm_ms=0.05530
+FP16_REFERENCE iq1_s-1 down relative_l2=0.000367924
+iq1_s-1 down           rows 25 experts 3  ref_rms 0.4073  rel_l2 0.00072  max/rms 0.0037  zero row 0
+TIMING q2_K-1 gate/up rows=25 mmq_ms=0.02140 fp16_dequant_gemm_ms=0.05597
+FP16_REFERENCE q2_K-1 gate/up relative_l2=0.000751922
+q2_K-1 gate/up         rows 25 experts 3  ref_rms 0.4371  rel_l2 0.00096  max/rms 0.0042  zero row 0
+TIMING q2_K-1 down rows=25 mmq_ms=0.02109 fp16_dequant_gemm_ms=0.05775
+FP16_REFERENCE q2_K-1 down relative_l2=0.000497451
+q2_K-1 down            rows 25 experts 3  ref_rms 0.3761  rel_l2 0.00065  max/rms 0.0029  zero row 0
+TIMING q3_K-1 gate/up rows=25 mmq_ms=0.02123 fp16_dequant_gemm_ms=0.05959
+FP16_REFERENCE q3_K-1 gate/up relative_l2=0.000818457
+q3_K-1 gate/up         rows 25 experts 3  ref_rms 0.3947  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q3_K-1 down rows=25 mmq_ms=0.02147 fp16_dequant_gemm_ms=0.06120
+FP16_REFERENCE q3_K-1 down relative_l2=0.000575725
+q3_K-1 down            rows 25 experts 3  ref_rms 0.3234  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q4_K-1 gate/up rows=25 mmq_ms=0.01823 fp16_dequant_gemm_ms=0.05100
+FP16_REFERENCE q4_K-1 gate/up relative_l2=0.000955092
+q4_K-1 gate/up         rows 25 experts 3  ref_rms 0.3435  rel_l2 0.00148  max/rms 0.0067  zero row 0
+TIMING q4_K-1 down rows=25 mmq_ms=0.01853 fp16_dequant_gemm_ms=0.05253
+FP16_REFERENCE q4_K-1 down relative_l2=0.000603145
+q4_K-1 down            rows 25 experts 3  ref_rms 0.3139  rel_l2 0.00094  max/rms 0.0042  zero row 0
+TIMING q5_K-1 gate/up rows=25 mmq_ms=0.01944 fp16_dequant_gemm_ms=0.06124
+FP16_REFERENCE q5_K-1 gate/up relative_l2=0.000963001
+q5_K-1 gate/up         rows 25 experts 3  ref_rms 0.3393  rel_l2 0.00129  max/rms 0.0058  zero row 0
+TIMING q5_K-1 down rows=25 mmq_ms=0.01965 fp16_dequant_gemm_ms=0.06287
+FP16_REFERENCE q5_K-1 down relative_l2=0.000609123
+q5_K-1 down            rows 25 experts 3  ref_rms 0.3112  rel_l2 0.00082  max/rms 0.0041  zero row 0
+TIMING iq3_xxs-1 gate/up rows=25 mmq_ms=0.02140 fp16_dequant_gemm_ms=0.05284
+FP16_REFERENCE iq3_xxs-1 gate/up relative_l2=0.000765665
+iq3_xxs-1 gate/up      rows 25 experts 3  ref_rms 0.402  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_xxs-1 down rows=25 mmq_ms=0.02107 fp16_dequant_gemm_ms=0.05449
+FP16_REFERENCE iq3_xxs-1 down relative_l2=0.000505294
+iq3_xxs-1 down         rows 25 experts 3  ref_rms 0.3486  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-1 gate/up rows=25 mmq_ms=0.02058 fp16_dequant_gemm_ms=0.05242
+FP16_REFERENCE iq2_xxs-1 gate/up relative_l2=0.000435405
+iq2_xxs-1 gate/up      rows 25 experts 3  ref_rms 0.6775  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-1 down rows=25 mmq_ms=0.02040 fp16_dequant_gemm_ms=0.05413
+FP16_REFERENCE iq2_xxs-1 down relative_l2=0.000410751
+iq2_xxs-1 down         rows 25 experts 3  ref_rms 0.412  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-1 gate/up rows=25 mmq_ms=0.02158 fp16_dequant_gemm_ms=0.05376
+FP16_REFERENCE iq2_s-1 gate/up relative_l2=0.000669834
+iq2_s-1 gate/up        rows 25 experts 3  ref_rms 0.4302  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-1 down rows=25 mmq_ms=0.02130 fp16_dequant_gemm_ms=0.05569
+FP16_REFERENCE iq2_s-1 down relative_l2=0.000451658
+iq2_s-1 down           rows 25 experts 3  ref_rms 0.3637  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-1 gate/up rows=25 mmq_ms=0.02261 fp16_dequant_gemm_ms=0.05345
+FP16_REFERENCE iq3_s-1 gate/up relative_l2=0.000763989
+iq3_s-1 gate/up        rows 25 experts 3  ref_rms 0.3924  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-1 down rows=25 mmq_ms=0.02243 fp16_dequant_gemm_ms=0.05499
+FP16_REFERENCE iq3_s-1 down relative_l2=0.000506301
+iq3_s-1 down           rows 25 experts 3  ref_rms 0.3451  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-1 gate/up rows=25 mmq_ms=0.01928 fp16_dequant_gemm_ms=0.05345
+FP16_REFERENCE iq4_xs-1 gate/up relative_l2=0.000890166
+iq4_xs-1 gate/up       rows 25 experts 3  ref_rms 0.3506  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-1 down rows=25 mmq_ms=0.01946 fp16_dequant_gemm_ms=0.05499
+FP16_REFERENCE iq4_xs-1 down relative_l2=0.000570017
+iq4_xs-1 down          rows 25 experts 3  ref_rms 0.3172  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-1 gate/up rows=25 mmq_ms=0.02550 fp16_dequant_gemm_ms=0.05225
+FP16_REFERENCE q8_0-1 gate/up relative_l2=0.000964757
+q8_0-1 gate/up         rows 25 experts 3  ref_rms 0.3374  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-1 down rows=25 mmq_ms=0.02540 fp16_dequant_gemm_ms=0.05352
+FP16_REFERENCE q8_0-1 down relative_l2=0.000604885
+q8_0-1 down            rows 25 experts 3  ref_rms 0.3113  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq1_s-2 gate/up rows=97 mmq_ms=0.03195 fp16_dequant_gemm_ms=0.07803
+FP16_REFERENCE iq1_s-2 gate/up relative_l2=0.000363214
+iq1_s-2 gate/up        rows 97 experts 3  ref_rms 0.7372  rel_l2 0.00071  max/rms 0.0034  zero row 0
+TIMING iq1_s-2 down rows=97 mmq_ms=0.03123 fp16_dequant_gemm_ms=0.09789
+FP16_REFERENCE iq1_s-2 down relative_l2=0.000372238
+iq1_s-2 down           rows 97 experts 3  ref_rms 0.4154  rel_l2 0.00072  max/rms 0.0039  zero row 0
+TIMING q2_K-2 gate/up rows=97 mmq_ms=0.03942 fp16_dequant_gemm_ms=0.08192
+FP16_REFERENCE q2_K-2 gate/up relative_l2=0.000741002
+q2_K-2 gate/up         rows 97 experts 3  ref_rms 0.4431  rel_l2 0.00097  max/rms 0.0045  zero row 0
+TIMING q2_K-2 down rows=97 mmq_ms=0.03891 fp16_dequant_gemm_ms=0.10127
+FP16_REFERENCE q2_K-2 down relative_l2=0.000496439
+q2_K-2 down            rows 97 experts 3  ref_rms 0.3803  rel_l2 0.00065  max/rms 0.0033  zero row 0
+TIMING q3_K-2 gate/up rows=97 mmq_ms=0.03779 fp16_dequant_gemm_ms=0.08714
+FP16_REFERENCE q3_K-2 gate/up relative_l2=0.000808254
+q3_K-2 gate/up         rows 97 experts 3  ref_rms 0.4064  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q3_K-2 down rows=97 mmq_ms=0.03635 fp16_dequant_gemm_ms=0.10619
+FP16_REFERENCE q3_K-2 down relative_l2=0.000576751
+q3_K-2 down            rows 97 experts 3  ref_rms 0.3289  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q4_K-2 gate/up rows=97 mmq_ms=0.03612 fp16_dequant_gemm_ms=0.07423
+FP16_REFERENCE q4_K-2 gate/up relative_l2=0.000939059
+q4_K-2 gate/up         rows 97 experts 3  ref_rms 0.3539  rel_l2 0.00148  max/rms 0.0066  zero row 0
+TIMING q4_K-2 down rows=97 mmq_ms=0.03533 fp16_dequant_gemm_ms=0.09337
+FP16_REFERENCE q4_K-2 down relative_l2=0.00059285
+q4_K-2 down            rows 97 experts 3  ref_rms 0.3195  rel_l2 0.00096  max/rms 0.0047  zero row 0
+TIMING q5_K-2 gate/up rows=97 mmq_ms=0.03850 fp16_dequant_gemm_ms=0.09001
+FP16_REFERENCE q5_K-2 gate/up relative_l2=0.000948357
+q5_K-2 gate/up         rows 97 experts 3  ref_rms 0.3498  rel_l2 0.00127  max/rms 0.0062  zero row 0
+TIMING q5_K-2 down rows=97 mmq_ms=0.03809 fp16_dequant_gemm_ms=0.10841
+FP16_REFERENCE q5_K-2 down relative_l2=0.000606146
+q5_K-2 down            rows 97 experts 3  ref_rms 0.3168  rel_l2 0.00083  max/rms 0.0045  zero row 0
+TIMING iq3_xxs-2 gate/up rows=97 mmq_ms=0.03482 fp16_dequant_gemm_ms=0.07711
+FP16_REFERENCE iq3_xxs-2 gate/up relative_l2=0.00076313
+iq3_xxs-2 gate/up      rows 97 experts 3  ref_rms 0.4137  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_xxs-2 down rows=97 mmq_ms=0.03389 fp16_dequant_gemm_ms=0.09625
+FP16_REFERENCE iq3_xxs-2 down relative_l2=0.000510608
+iq3_xxs-2 down         rows 97 experts 3  ref_rms 0.3541  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-2 gate/up rows=97 mmq_ms=0.03243 fp16_dequant_gemm_ms=0.07636
+FP16_REFERENCE iq2_xxs-2 gate/up relative_l2=0.000431625
+iq2_xxs-2 gate/up      rows 97 experts 3  ref_rms 0.6917  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-2 down rows=97 mmq_ms=0.03102 fp16_dequant_gemm_ms=0.09530
+FP16_REFERENCE iq2_xxs-2 down relative_l2=0.000412008
+iq2_xxs-2 down         rows 97 experts 3  ref_rms 0.4173  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-2 gate/up rows=97 mmq_ms=0.03676 fp16_dequant_gemm_ms=0.07845
+FP16_REFERENCE iq2_s-2 gate/up relative_l2=0.000666733
+iq2_s-2 gate/up        rows 97 experts 3  ref_rms 0.4401  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-2 down rows=97 mmq_ms=0.03574 fp16_dequant_gemm_ms=0.09789
+FP16_REFERENCE iq2_s-2 down relative_l2=0.000451713
+iq2_s-2 down           rows 97 experts 3  ref_rms 0.3692  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-2 gate/up rows=97 mmq_ms=0.03594 fp16_dequant_gemm_ms=0.07752
+FP16_REFERENCE iq3_s-2 gate/up relative_l2=0.000755634
+iq3_s-2 gate/up        rows 97 experts 3  ref_rms 0.4046  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-2 down rows=97 mmq_ms=0.03459 fp16_dequant_gemm_ms=0.09679
+FP16_REFERENCE iq3_s-2 down relative_l2=0.000502903
+iq3_s-2 down           rows 97 experts 3  ref_rms 0.3512  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-2 gate/up rows=97 mmq_ms=0.03347 fp16_dequant_gemm_ms=0.07793
+FP16_REFERENCE iq4_xs-2 gate/up relative_l2=0.000880999
+iq4_xs-2 gate/up       rows 97 experts 3  ref_rms 0.3617  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-2 down rows=97 mmq_ms=0.03215 fp16_dequant_gemm_ms=0.09748
+FP16_REFERENCE iq4_xs-2 down relative_l2=0.000572829
+iq4_xs-2 down          rows 97 experts 3  ref_rms 0.3233  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-2 gate/up rows=97 mmq_ms=0.04063 fp16_dequant_gemm_ms=0.07660
+FP16_REFERENCE q8_0-2 gate/up relative_l2=0.000948472
+q8_0-2 gate/up         rows 97 experts 3  ref_rms 0.3481  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-2 down rows=97 mmq_ms=0.03932 fp16_dequant_gemm_ms=0.09439
+FP16_REFERENCE q8_0-2 down relative_l2=0.000603831
+q8_0-2 down            rows 97 experts 3  ref_rms 0.3169  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq1_s-3 gate/up rows=128 mmq_ms=0.04219 fp16_dequant_gemm_ms=0.03746
+FP16_REFERENCE iq1_s-3 gate/up relative_l2=0.000360294
+iq1_s-3 gate/up        rows 128 experts 1  ref_rms 0.7379  rel_l2 0.00070  max/rms 0.0031  zero row 0
+TIMING iq1_s-3 down rows=128 mmq_ms=0.03637 fp16_dequant_gemm_ms=0.03922
+FP16_REFERENCE iq1_s-3 down relative_l2=0.00037238
+iq1_s-3 down           rows 128 experts 1  ref_rms 0.4144  rel_l2 0.00072  max/rms 0.0038  zero row 0
+TIMING q2_K-3 gate/up rows=128 mmq_ms=0.07789 fp16_dequant_gemm_ms=0.03749
+FP16_REFERENCE q2_K-3 gate/up relative_l2=0.000736159
+q2_K-3 gate/up         rows 128 experts 1  ref_rms 0.447  rel_l2 0.00096  max/rms 0.0045  zero row 0
+TIMING q2_K-3 down rows=128 mmq_ms=0.05312 fp16_dequant_gemm_ms=0.03901
+FP16_REFERENCE q2_K-3 down relative_l2=0.000497197
+q2_K-3 down            rows 128 experts 1  ref_rms 0.3815  rel_l2 0.00064  max/rms 0.0029  zero row 0
+TIMING q3_K-3 gate/up rows=128 mmq_ms=0.05108 fp16_dequant_gemm_ms=0.03891
+FP16_REFERENCE q3_K-3 gate/up relative_l2=0.000793635
+q3_K-3 gate/up         rows 128 experts 1  ref_rms 0.4068  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q3_K-3 down rows=128 mmq_ms=0.04147 fp16_dequant_gemm_ms=0.04065
+FP16_REFERENCE q3_K-3 down relative_l2=0.000576865
+q3_K-3 down            rows 128 experts 1  ref_rms 0.3282  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q4_K-3 gate/up rows=128 mmq_ms=0.04291 fp16_dequant_gemm_ms=0.03428
+FP16_REFERENCE q4_K-3 gate/up relative_l2=0.000940673
+q4_K-3 gate/up         rows 128 experts 1  ref_rms 0.3555  rel_l2 0.00146  max/rms 0.0061  zero row 0
+TIMING q4_K-3 down rows=128 mmq_ms=0.03686 fp16_dequant_gemm_ms=0.03655
+FP16_REFERENCE q4_K-3 down relative_l2=0.000598911
+q4_K-3 down            rows 128 experts 1  ref_rms 0.319  rel_l2 0.00095  max/rms 0.0049  zero row 0
+TIMING q5_K-3 gate/up rows=128 mmq_ms=0.04452 fp16_dequant_gemm_ms=0.03982
+FP16_REFERENCE q5_K-3 gate/up relative_l2=0.000953354
+q5_K-3 gate/up         rows 128 experts 1  ref_rms 0.3513  rel_l2 0.00127  max/rms 0.0063  zero row 0
+TIMING q5_K-3 down rows=128 mmq_ms=0.03860 fp16_dequant_gemm_ms=0.04185
+FP16_REFERENCE q5_K-3 down relative_l2=0.000610364
+q5_K-3 down            rows 128 experts 1  ref_rms 0.3162  rel_l2 0.00082  max/rms 0.0041  zero row 0
+TIMING iq3_xxs-3 gate/up rows=128 mmq_ms=0.04257 fp16_dequant_gemm_ms=0.03553
+FP16_REFERENCE iq3_xxs-3 gate/up relative_l2=0.000743952
+iq3_xxs-3 gate/up      rows 128 experts 1  ref_rms 0.4163  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_xxs-3 down rows=128 mmq_ms=0.03716 fp16_dequant_gemm_ms=0.03748
+FP16_REFERENCE iq3_xxs-3 down relative_l2=0.000509651
+iq3_xxs-3 down         rows 128 experts 1  ref_rms 0.3542  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-3 gate/up rows=128 mmq_ms=0.04178 fp16_dequant_gemm_ms=0.03543
+FP16_REFERENCE iq2_xxs-3 gate/up relative_l2=0.000423767
+iq2_xxs-3 gate/up      rows 128 experts 1  ref_rms 0.6946  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_xxs-3 down rows=128 mmq_ms=0.03625 fp16_dequant_gemm_ms=0.03727
+FP16_REFERENCE iq2_xxs-3 down relative_l2=0.00041052
+iq2_xxs-3 down         rows 128 experts 1  ref_rms 0.4179  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-3 gate/up rows=128 mmq_ms=0.04915 fp16_dequant_gemm_ms=0.03615
+FP16_REFERENCE iq2_s-3 gate/up relative_l2=0.000661469
+iq2_s-3 gate/up        rows 128 experts 1  ref_rms 0.4432  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq2_s-3 down rows=128 mmq_ms=0.03881 fp16_dequant_gemm_ms=0.03789
+FP16_REFERENCE iq2_s-3 down relative_l2=0.00045046
+iq2_s-3 down           rows 128 experts 1  ref_rms 0.3694  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-3 gate/up rows=128 mmq_ms=0.04362 fp16_dequant_gemm_ms=0.03594
+FP16_REFERENCE iq3_s-3 gate/up relative_l2=0.00074147
+iq3_s-3 gate/up        rows 128 experts 1  ref_rms 0.407  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq3_s-3 down rows=128 mmq_ms=0.03758 fp16_dequant_gemm_ms=0.03759
+FP16_REFERENCE iq3_s-3 down relative_l2=0.00050444
+iq3_s-3 down           rows 128 experts 1  ref_rms 0.351  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-3 gate/up rows=128 mmq_ms=0.04083 fp16_dequant_gemm_ms=0.03615
+FP16_REFERENCE iq4_xs-3 gate/up relative_l2=0.000892309
+iq4_xs-3 gate/up       rows 128 experts 1  ref_rms 0.3626  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING iq4_xs-3 down rows=128 mmq_ms=0.03533 fp16_dequant_gemm_ms=0.03787
+FP16_REFERENCE iq4_xs-3 down relative_l2=0.000571831
+iq4_xs-3 down          rows 128 experts 1  ref_rms 0.3222  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-3 gate/up rows=128 mmq_ms=0.04379 fp16_dequant_gemm_ms=0.03471
+FP16_REFERENCE q8_0-3 gate/up relative_l2=0.000941358
+q8_0-3 gate/up         rows 128 experts 1  ref_rms 0.349  rel_l2 0.00000  max/rms 0.0000  zero row 0
+TIMING q8_0-3 down rows=128 mmq_ms=0.03850 fp16_dequant_gemm_ms=0.03707
+FP16_REFERENCE q8_0-3 down relative_l2=0.000606776
+q8_0-3 down            rows 128 experts 1  ref_rms 0.3162  rel_l2 0.00000  max/rms 0.0000  zero row 0
+Ornith MMQ screen passed
+<end of output>
+Test time = 150.78 sec
+----------------------------------------------------------
+Test Passed.
+"ornith_mmq_test" end time: Oct 21 05:42 UTC
+"ornith_mmq_test" time elapsed: 00:02:30
+----------------------------------------------------------
+
+End testing: Oct 21 05:42 UTC
+
+
+Compute Sanitizer (integer-dot expert path):
+========= COMPUTE-SANITIZER
+types 19/19/10
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=19/19/10 entries=1 ms=2.215526
+GPU gate relative L2 4.8058304e-08 max 9.5367432e-07
+GPU up relative L2 4.8058304e-08 max 9.5367432e-07
+GPU down relative L2 8.3110848e-07 max 1.385808e-06
+GPU grouped multi-token relative L2 0 max 0
+types 11/11/11
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=11/11/11 entries=1 ms=3.884086
+GPU gate relative L2 4.5620664e-08 max 4.7683716e-07
+GPU up relative L2 4.5620664e-08 max 4.7683716e-07
+GPU down relative L2 7.8974767e-07 max 8.8661909e-07
+GPU grouped multi-token relative L2 0 max 0
+types 12/13/13
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=12/13/13 entries=1 ms=2.668646
+GPU gate relative L2 4.9029415e-08 max 4.7683716e-07
+GPU up relative L2 4.6579398e-08 max 4.7683716e-07
+GPU down relative L2 1.2926722e-06 max 1.1324883e-06
+GPU grouped multi-token relative L2 0 max 0
+types 18/18/22
+CPU pool token 0 relative L2 6.7530035e-07 max 7.1525574e-07
+CPU pool token 1 relative L2 6.7530035e-07 max 7.1525574e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=18/18/22 entries=1 ms=2.267176
+GPU gate relative L2 4.80154e-08 max 4.7683716e-07
+GPU up relative L2 4.80154e-08 max 4.7683716e-07
+GPU down relative L2 3.3486984e-07 max 5.2154064e-07
+GPU grouped multi-token relative L2 0 max 0
+types 21/21/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=21/21/18 entries=1 ms=2.518886
+GPU gate relative L2 4.8167419e-08 max 4.7683716e-07
+GPU up relative L2 4.8167419e-08 max 4.7683716e-07
+GPU down relative L2 1.81718e-06 max 4.3506734e-06
+GPU grouped multi-token relative L2 0 max 0
+types 16/16/10
+CPU pool token 0 relative L2 1.9032857e-06 max 1.9073486e-06
+CPU pool token 1 relative L2 1.9032857e-06 max 1.9073486e-06
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=16/16/10 entries=1 ms=2.275730
+GPU gate relative L2 4.8166983e-08 max 4.7683716e-07
+GPU up relative L2 4.8166983e-08 max 4.7683716e-07
+GPU down relative L2 9.5168189e-07 max 1.0840595e-06
+GPU grouped multi-token relative L2 0 max 0
+types 22/22/18
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=22/22/18 entries=1 ms=2.238310
+GPU gate relative L2 4.5102402e-08 max 4.7683716e-07
+GPU up relative L2 4.5102402e-08 max 4.7683716e-07
+GPU down relative L2 1.8135804e-06 max 4.4107437e-06
+GPU grouped multi-token relative L2 0 max 0
+types 18/18/23
+CPU pool token 0 relative L2 7.5160159e-07 max 4.7683716e-07
+CPU pool token 1 relative L2 7.5160159e-07 max 4.7683716e-07
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=18/18/23 entries=1 ms=2.132627
+GPU gate relative L2 4.80154e-08 max 4.7683716e-07
+GPU up relative L2 4.80154e-08 max 4.7683716e-07
+GPU down relative L2 4.2792489e-07 max 4.61936e-07
+GPU grouped multi-token relative L2 0 max 0
+types 8/8/8
+CPU pool token 0 relative L2 0 max 0
+CPU pool token 1 relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+dequant relative L2 0 max 0
+ORNITH_KERNEL types=8/8/8 entries=1 ms=2.889792
+GPU gate relative L2 4.6980738e-08 max 4.7683716e-07
+GPU up relative L2 4.6980738e-08 max 4.7683716e-07
+GPU down relative L2 7.5842057e-07 max 7.9162419e-07
+GPU grouped multi-token relative L2 0 max 0
+Ornith expert parity passed
+========= ERROR SUMMARY: 0 errors

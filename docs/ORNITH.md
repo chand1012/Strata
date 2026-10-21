@@ -56,22 +56,65 @@ LlamaSwap or terminate other applications.
 * The compatibility GPU kernel supports the quantization types in these files, including IQ1_S, Q2_K and Q3_K.
   It expands one 256-value weight block in shared memory at a time and consumes Q8_1 activations. Entire experts
   stay compressed in RAM and VRAM.
-* Prompt processing uses the same grouped compatibility path. MMQ is disabled for these layouts, so it cannot
-  interpret mixed gate/up matrices as one uniformly quantized matrix. Optimized mixed-format MMQ and fused
-  decode kernels are future performance work, not prerequisites for the compatibility path.
+* The default prompt path remains the grouped compatibility path. Opt-in MMQ handles gate and up independently
+  when their types differ, including their activation-quantization layouts. Unsupported layers retain the grouped
+  path without disabling MMQ for the other layers.
+* The optional integer-dot decoder reads compressed weights directly. IQ2_XXS and IQ2_S keep fractional scale
+  terms in this path. Existing callers retain their original arithmetic.
+* With MMQ enabled, streaming buffers cover the largest eligible active layer. A disabled MTP block does not
+  enlarge those buffers; its weights and cache placement remain loaded.
 
 This path is intended for CUDA. HIP and SYCL have not been validated. The normal fused expert paths do not
 select the compatibility kernel unless the Ornith flag is set. CUDA graph capture and CPU/GPU routing still use
 the existing engine scheduler.
+
+## Performance controls
+
+These controls are opt-in and specific to the Ornith compatibility path. The build must include the matching
+`libstrata_kq.so` beside the engine; this change uses version 2 of that library's internal ABI.
+
+| Environment variable | Behavior |
+| --- | --- |
+| `STRATA_ORNITH_MMQ=1` and `STRATA_MMQ_KQ=1` | Enable grouped int8 prompt products and expert streaming. Chunks larger than the hybrid-row threshold (128 by default) use streaming. |
+| `STRATA_ORNITH_DECODE=3` | Enable direct integer-dot expert projections. An unset value retains the compatibility kernel. |
+| `STRATA_ORNITH_REBALANCE=N` | Rotate the starting layer of decode cache replacement and age all layer scores. Allow up to N replacements every 32 tokens, capped at 512. Unset or zero preserves the original scheduler. |
+| `STRATA_ORNITH_PCIE=N` | Send at most N missed experts per layer to the GPU during single-token decoding, capped at 8. Requires pinned host weights and reserves a small staging buffer. Unset or zero leaves misses on the CPU. |
+| `STRATA_ORNITH_PROFILE=1` | Print synchronized stage timings and streamed byte counts. This diagnostic changes overlap and must not be used for speed claims. |
+| `STRATA_ORNITH_TRACE=1` | Start a CUDA profiler capture after engine warm-up. Use with Nsight Systems' CUDA profiler API capture range. |
+
+`--chunk` and `--pool-workers` remain normal engine arguments. Larger chunks amortize streaming transfers but
+reserve more VRAM and leave fewer resident experts for generation. Increasing PCIe offload or cache-copy budgets
+can make generation slower. See the [performance validation](validation/ORNITH-PERFORMANCE.md) for measured
+settings, comparisons, and limits on the tested 3090 Ti / 64 GB system.
+
+The measured 8K-context performance configurations use `--chunk 4096`, MTP off, and the MMQ and integer-dot
+flags above, plus `STRATA_ORNITH_REBALANCE=8`:
+
+| Quant | `--pool-workers` | `STRATA_ORNITH_PCIE` |
+| --- | ---: | ---: |
+| Unsloth UD-IQ3_XXS | 7 | 2 |
+| Bartowski Q3_K_S | 7 | 0 |
+
+Apply these arguments and environment values to a copy of the generated server configuration. They target
+the measured prompt-plus-256-token workload. In particular, Bartowski's faster prompt processing comes with
+slower generation than its original configuration. The setup helper keeps the original conservative defaults.
+See the validation record for full timings, memory usage, numerical differences and comparison limits.
+
+The benchmark utility `tools/bench_ornith.py` runs exact-length chat prompts through the engine protocol. It accepts
+an engine command/environment JSON, the GGUF and its chat template, and a new output directory. It unloads
+LlamaSwap, checks GPU idleness, enforces a 56 GiB no-swap scope, excludes a warm-up request, and rejects prompt
+reuse. It records inputs, outputs, binary/library hashes, first-token latency, engine timings, and resource samples.
+It requires Linux, a systemd user session, `nvidia-smi`, the repository Python dependencies, and LlamaSwap (URL can
+be set with `--llamaswap`). Its default filler is synthetic repeated text; `--corpus` supplies other prompt material.
 
 ## Validation
 
 Build and run the focused checks on an otherwise idle GPU:
 
 ```sh
-cmake --build build --target ornith_parity pool_tasks_test native_grouped_parity \
+cmake --build build --target ornith_parity ornith_mmq_test pool_tasks_test native_grouped_parity \
   gguf_reader_test gguf_split_test gguf_geometry_test ornith_layout_test -j 6
-ctest --test-dir build -R '^(ornith_parity|pool_tasks_test|native_grouped_parity|gguf_reader_test|gguf_split_test|gguf_geometry_test|ornith_layout_test)$' --output-on-failure
+ctest --test-dir build -R '^(ornith_parity|ornith_integer_parity|ornith_mmq_test|pool_tasks_test|native_grouped_parity|gguf_reader_test|gguf_split_test|gguf_geometry_test|ornith_layout_test)$' --output-on-failure
 ```
 
 `ornith_parity` checks the actual 3072/1024 expert geometry, IQ1_S/Q2_K, Q3_K, mixed Q4_K/Q5_K and IQ down
