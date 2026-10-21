@@ -1729,7 +1729,7 @@ if(STRATA_NATIVE_EXPERTS)
     set(_strata_mmq_cuda_types ${_strata_mmq_types})
     set(_strata_kq_types q4_k q5_k q5_1 q6_k)
     if(NOT STRATA_HIP_GFX906)
-      list(APPEND _strata_kq_types iq1_s q2_k q3_k) # opt-in Ornith prompt products, CUDA DSO only
+      list(APPEND _strata_kq_types iq1_s q2_k q3_k q4_0) # opt-in Ornith prompt products, CUDA DSO only
     endif()
     set(_strata_kq_dso OFF)
     if(STRATA_MMQ_KQUANTS AND STRATA_HIP_GFX906)

@@ -255,7 +255,7 @@ int main() {
             const std::vector<std::vector<int>> batches{{1, 0, 3}, {8, 0, 17}, {32, 1, 64}, {128}};
             int trial = 0;
             for (const auto &counts : batches) {
-                for (ggml_type type : {GGML_TYPE_IQ1_S, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
+                for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_IQ1_S, GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
                                        GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_S,
                                        GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0}) {
                     const std::string tag = std::string(ggml_type_name(type)) + "-" + std::to_string(trial);

@@ -110,7 +110,7 @@ def main():
             if line.startswith('DONE '):
                 fields = line.split()
                 entry = {'name':case['name'], 'rep':rep, 'prompt_tokens':len(ids), 'output_ids':out, 'output':tk.decode(out), 'wall_s':time.monotonic()-t, 'ttft_s':ttft, 'done':line,
-                         'generated':int(fields[1]), 'prompt_ms':float(fields[3]), 'decode_ms':float(fields[4]), 'reused':int(fields[8])}
+                         'generated':int(fields[1]), 'prompt_ms':float(fields[3]), 'decode_ms':float(fields[4]), 'reused':int(fields[8]), 'drafts_accepted':int(fields[6]), 'drafts_offered':int(fields[7])}
                 assert entry['reused'] == 0, entry
                 entry['pp_tps'] = len(ids)*1000/entry['prompt_ms']
                 entry['tg_tps'] = entry['generated']*1000/entry['decode_ms'] if entry['decode_ms'] else None

@@ -1033,8 +1033,8 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
     };
     auto L = [](int64_t l, const char* s) { return "blk." + std::to_string(l) + "." + s; };
     m.layers.resize((size_t) g.n_layers);
-    // the MTP block whenever the file has one, with or without drafts (--mtp): the VRAM it takes is then the same
-    // either way, so the hybrid mode's slot tables - and with them the greedy text - do not depend on --mtp
+    // Load the MTP weights with or without drafts. Matched serial/speculative
+    // comparisons must also hold streaming capacity and cache policy constant.
     (void) want_mtp;
     m.has_mtp = g.n_mtp_layers > 0;
     for (int64_t l = 0; l < g.n_layers + (m.has_mtp ? 1 : 0); ++l) {
@@ -1283,15 +1283,18 @@ struct Engine {
     uint8_t* acts = nullptr;   // per token: its quantized activation (kNativeActBytes)
     cudaEvent_t ev_route = nullptr;
     uint8_t* stage[2] = {};
-    // A bounded single-token miss buffer; separate from the prompt's
-    // double-buffered stream.
+    // A bounded miss buffer, separate from the prompt stream. Optional
+    // verification rows use the same per-token selection as serial decode.
     int ornith_pcie = 0;
+    bool ornith_pcie_rows = false;
+    bool ornith_mtp_cache = false;
+    static constexpr int kPcieRowLimit = 8;
     int ornith_rebalance = 0;
     size_t rebalance_next = 0;
     uint8_t* pcie_stage = nullptr;
     struct PcieRows {
-        unsigned long long ptr[8];
-        int32_t start[9], dst[8], tok[8], count;
+        unsigned long long ptr[8 * kPcieRowLimit];
+        int32_t start[8 * kPcieRowLimit + 1], dst[8 * kPcieRowLimit], tok[8 * kPcieRowLimit], count;
     };
     PcieRows* pcie_rows = nullptr;
     long long pcie_entries = 0;
@@ -1397,6 +1400,10 @@ struct Engine {
         if (model.layers[0].L.compatibility && rb) ornith_rebalance = std::max(0, std::min(512, std::atoi(rb)));
         const char* pc = std::getenv("STRATA_ORNITH_PCIE");
         if (model.layers[0].L.compatibility && pc) ornith_pcie = std::max(0, std::min(8, std::atoi(pc)));
+        const char* pcrows = std::getenv("STRATA_ORNITH_PCIE_ROWS");
+        ornith_pcie_rows = model.layers[0].L.compatibility && pcrows && std::strcmp(pcrows, "1") == 0;
+        const char* mc = std::getenv("STRATA_ORNITH_MTP_CACHE");
+        ornith_mtp_cache = model.layers[0].L.compatibility && mc && std::strcmp(mc, "1") == 0;
         ctx = ctx_;
         n_sess = std::max(1, std::min(n_sessions, kVerify));
         vision = vision_;
@@ -2378,6 +2385,8 @@ struct Engine {
         jobs.clear();
         std::vector<char> quantized((size_t) T, 0);
         int n_miss = 0, n_pcie = 0;
+        int pcie_per_token[kPcieRowLimit] = {};
+        const bool pcie_batch = T == 1 || (ornith_pcie_rows && T <= kPcieRowLimit);
         std::map<int, size_t> open;   // expert -> its job with room
         const bool defer = rows_deferred && li < m->layers.size();
         if (defer) {
@@ -2389,7 +2398,8 @@ struct Engine {
             if (!defer) H.score[(size_t) x] += 1.0;
             h_miss[e] = H.slot_of[(size_t) x] < 0;
             if (!h_miss[e]) continue;
-            if (T == 1 && n_pcie < ornith_pcie) {
+            const int t = e / Kp;
+            if (pcie_batch && pcie_per_token[t] < ornith_pcie) {
                 // The previous layer's stream has passed ev_route before these
                 // pinned words are reused.
                 auto* target = pcie_stage + (size_t)n_pcie * L.stride;
@@ -2397,13 +2407,13 @@ struct Engine {
                 pcie_rows->ptr[n_pcie] = (unsigned long long)target;
                 pcie_rows->start[n_pcie] = n_pcie;
                 pcie_rows->dst[n_pcie] = e;
-                pcie_rows->tok[n_pcie] = 0;
+                pcie_rows->tok[n_pcie] = t;
+                ++pcie_per_token[t];
                 ++n_pcie;
                 h_miss[e] = 0;
                 continue;
             }
             ++n_miss;
-            const int t = e / Kp;
             if (!quantized[(size_t) t]) {
                 C::native_quant_act(H.fmt, h_h + (size_t) t * N, acts + (size_t) t * C::kNativeActBytes);
                 quantized[(size_t) t] = 1;
@@ -2457,9 +2467,13 @@ struct Engine {
         if (rotate) max_swaps = ornith_rebalance;
         int left = max_swaps;
         const size_t first = rotate ? rebalance_next : 0;
-        for (size_t i = 0; i < hy.size() && left > 0; ++i) {
-            const size_t li = (first + i) % hy.size();
-            if (rotate) rebalance_next = (li + 1) % hy.size();
+        // Draft routing must not spend the main model's replacement budget or
+        // move its rotating cursor. This opt-in policy keeps the draft layer's
+        // slots fixed and gives serial/MTP main rows the same cache schedule.
+        const size_t cache_layers = ornith_mtp_cache ? m->layers.size() : hy.size();
+        for (size_t i = 0; i < cache_layers && left > 0; ++i) {
+            const size_t li = (first + i) % cache_layers;
+            if (rotate) rebalance_next = (li + 1) % cache_layers;
             Hy& H = hy[li];
             const Layer& L = layer_at((int) li);
             const int S = L.n_slots;
@@ -2857,7 +2871,7 @@ struct Engine {
     /// stopped mid-answer leaves the state at the tokens it has shown: a conversation that continues from them (the server's
     /// hand-over of a stopped request to a batch slot) reuses it instead of reading them again.
     int spec_step(int x_tok, const std::vector<int32_t>& fix, int D, std::vector<int32_t>& drafts, int32_t* picks,
-                  const std::atomic<bool>* cancel = nullptr) {
+                  const std::atomic<bool>* cancel = nullptr, bool (*terminal)(int) = nullptr) {
         const int N = (int) m->g.n_embd;
         if (main_hybrid) D = std::min<int>(D, (int) (kRebalanceEvery - pos % kRebalanceEvery) - 1);
         const int T0 = (int) fix.size() + 1;   // the redo rows and the row of x
@@ -2907,7 +2921,10 @@ struct Engine {
         CK(cudaMemcpyAsync(hpin + 2, pick, (size_t) T * 4, cudaMemcpyDeviceToHost, st));
         CK(cudaStreamSynchronize(st));
         int a = 0;
-        while (a < D && hpin[2 + a] == drafts[(size_t) a]) ++a;
+        // A terminal token is emitted from picks[a] on the next iteration,
+        // just as in serial decoding; do not commit it or later draft rows.
+        while (a < D && hpin[2 + a] == drafts[(size_t) a] &&
+               !(terminal && terminal(drafts[(size_t) a]))) ++a;
         if (cancel != nullptr && cancel->load()) a = 0;
         for (int i = 0; i <= a; ++i) picks[i] = hpin[2 + i];
         commit(a + 1);
@@ -3071,8 +3088,25 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             if (E.mmq_layer(li) && (li < m.layers.size() || E.mtp_d > 0))
                 stream_layer = std::max(stream_layer, all[li]->stride * (size_t)ne);
     }
-    const size_t staging = E.use_mmq && E.main_hybrid ? 2 * (stream_layer + kMmqTail) : 0;
-    const size_t pcie_bytes = E.ornith_pcie ? (max_layer / (size_t)ne) * E.ornith_pcie + kMmqTail : 0;
+    // The isolated MTP prompt pass always uses stream slot zero. With this
+    // opt-in layout, slot one only needs to cover the main layers. Keep the
+    // MTP capacity with --mtp 0 as well for matched-placement comparisons.
+    const char* compact_env = std::getenv("STRATA_ORNITH_MTP_COMPACT");
+    const bool compact_mtp = m.layers[0].L.compatibility && m.has_mtp &&
+                             compact_env && std::strcmp(compact_env, "1") == 0;
+    size_t stream_bytes[2] = {stream_layer, stream_layer};
+    if (compact_mtp && !E.layer_mmq.empty()) {
+        size_t main_stream = 0;
+        for (size_t li = 0; li < m.layers.size(); ++li)
+            if (E.mmq_layer(li)) main_stream = std::max(main_stream, all[li]->stride * (size_t)ne);
+        stream_bytes[0] = main_stream;
+        if (E.mmq_layer(m.layers.size()))
+            stream_bytes[0] = std::max(main_stream, m.mtp.stride * (size_t)ne);
+        stream_bytes[1] = main_stream;
+    }
+    const size_t staging = E.use_mmq && E.main_hybrid ? stream_bytes[0] + stream_bytes[1] + 2 * kMmqTail : 0;
+    const size_t pcie_rows = E.ornith_pcie_rows ? Engine::kPcieRowLimit : 1;
+    const size_t pcie_bytes = E.ornith_pcie ? (max_layer / (size_t)ne) * E.ornith_pcie * pcie_rows + kMmqTail : 0;
     const size_t buffers = staging + pcie_bytes;
     size_t slot_bytes = budget2 > buffers ? budget2 - buffers : 0;
     if (slot_bytes + buffers + ((size_t)256 << 20) > fr)
@@ -3167,8 +3201,8 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     if (staging) {
         CK(cudaStreamCreateWithFlags(&E.cst, cudaStreamNonBlocking));
         for (int b = 0; b < 2; ++b) {
-            CK(cudaMalloc(&E.stage[b], stream_layer + kMmqTail));
-            CK(cudaMemset(E.stage[b], 0, stream_layer + kMmqTail));
+            CK(cudaMalloc(&E.stage[b], stream_bytes[b] + kMmqTail));
+            CK(cudaMemset(E.stage[b], 0, stream_bytes[b] + kMmqTail));
             CK(cudaEventCreateWithFlags(&E.ev_copy[b], cudaEventDisableTiming));
             CK(cudaEventCreateWithFlags(&E.ev_used[b], cudaEventDisableTiming));
             CK(cudaEventRecord(E.ev_used[b], E.st));
@@ -3179,8 +3213,8 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         CK(cudaHostAlloc((void**)&E.pcie_rows, sizeof(Engine::PcieRows), cudaHostAllocDefault));
         std::fprintf(stderr,
                      "strata-q36: Ornith decode sends at most %d missed experts "
-                     "per layer over PCIe (%.1f MiB staging)\n",
-                     E.ornith_pcie, (double)pcie_bytes / (1 << 20));
+                     "per token/layer over PCIe (up to %zu rows, %.1f MiB staging)\n",
+                     E.ornith_pcie, pcie_rows, (double)pcie_bytes / (1 << 20));
     } else if (E.ornith_pcie) {
         E.ornith_pcie = 0;
         std::fprintf(stderr, "strata-q36: Ornith PCIe decode disabled: expert "
@@ -3834,8 +3868,14 @@ struct Serve {
             if (!emit(nx)) break;
             if (n_active > 0) window();
             if (spec && n_active == 0 && E.pos + E.mtp_d + 1 <= E.ctx) {
-                const int a = E.spec_step(nx, fix, E.mtp_d, drafts, picks, &stop);
-                offered += E.mtp_d;
+                // Leave the final output token unprocessed, as serial decode
+                // does. Otherwise its routing leaks into the next request's
+                // cache policy when a length limit ends inside accepted drafts.
+                const int depth = E.ornith_mtp_cache ?
+                    (int)std::min<long long>(E.mtp_d, max_new - produced - 1) : E.mtp_d;
+                const int a = E.spec_step(nx, fix, depth, drafts, picks, &stop,
+                                          E.ornith_mtp_cache ? is_eos : nullptr);
+                offered += (long long) drafts.size(); // spec_step may shorten the window at a cache boundary
                 accepted += a;
                 // the state now holds x and every accepted draft, whether or not the answer ends inside them (an end of
                 // answer, max_new): the held tokens say so, so a later request that continues this conversation matches them
@@ -3844,6 +3884,7 @@ struct Serve {
                 ss.live.push_back(nx);
                 for (int i = 0; i < a; ++i) ss.live.push_back(drafts[(size_t) i]);
                 fix.assign(drafts.begin(), drafts.begin() + a);
+                if (E.ornith_mtp_cache && stop.load()) { finish = "cancel"; break; }
                 bool ended = false;
                 for (int i = 0; i < a && !ended; ++i)
                     if (!emit(drafts[(size_t) i])) ended = true;
@@ -4148,8 +4189,10 @@ int strata::qwen35::run(int argc, char** argv) {
         while ((int) gen.size() < n_gen) {
             gen.push_back(nx);
             if ((int) gen.size() >= n_gen) break;
-            const int a = E.spec_step(nx, fix, E.mtp_d, drafts, picks);
-            offered += E.mtp_d;
+            const int depth = E.ornith_mtp_cache ?
+                std::min(E.mtp_d, n_gen - (int)gen.size() - 1) : E.mtp_d;
+            const int a = E.spec_step(nx, fix, depth, drafts, picks);
+            offered += (long long) drafts.size(); // spec_step may shorten the window at a cache boundary
             accepted += a;
             fix.assign(drafts.begin(), drafts.begin() + a);
             for (int i = 0; i < a && (int) gen.size() < n_gen; ++i) gen.push_back(drafts[(size_t) i]);

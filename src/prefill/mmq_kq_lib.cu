@@ -50,6 +50,7 @@ STRATA_KQ_EXPORT int strata_kq_run(int device, int type, const void* args, void*
     const mmq_args& a = *(const mmq_args*) args;
     const cudaStream_t s = (cudaStream_t) stream;
     switch ((ggml_type) type) {
+        case GGML_TYPE_Q4_0: mul_mat_q_case<GGML_TYPE_Q4_0>(ctx, a, s); break;
         case GGML_TYPE_IQ1_S: mul_mat_q_case<GGML_TYPE_IQ1_S>(ctx, a, s); break;
         case GGML_TYPE_Q2_K: mul_mat_q_case<GGML_TYPE_Q2_K>(ctx, a, s); break;
         case GGML_TYPE_Q3_K: mul_mat_q_case<GGML_TYPE_Q3_K>(ctx, a, s); break;

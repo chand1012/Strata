@@ -1,0 +1,317 @@
+Internal ctest changing into directory: $CONTAINER_WORK/build-ornith
+UpdateCTestConfiguration  from :$CONTAINER_WORK/build-ornith/DartConfiguration.tcl
+UpdateCTestConfiguration  from :$CONTAINER_WORK/build-ornith/DartConfiguration.tcl
+Test project $CONTAINER_WORK/build-ornith
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 126
+    Start 126: ornith_mmq_test
+
+126: Test command: $CONTAINER_WORK/build-ornith/ornith_mmq_test
+126: Working Directory: $CONTAINER_WORK/build-ornith
+126: Environment variables: 
+126:  STRATA_MMQ_KQ=1
+126:  STRATA_ORNITH_MMQ=1
+126: Test timeout computed to be: 600
+126: strata: K-quant prompt kernels from $CONTAINER_WORK/build-ornith/libstrata_kq.so (STRATA_MMQ_KQ=1)
+126: TIMING q4_0-0 gate/up rows=4 mmq_ms=0.01688 fp16_dequant_gemm_ms=0.04751
+126: FP16_REFERENCE q4_0-0 gate/up relative_l2=0.000714023
+126: q4_0-0 gate/up         rows  4 experts 3  ref_rms 0.3211  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-0 down rows=4 mmq_ms=0.01700 fp16_dequant_gemm_ms=0.05364
+126: FP16_REFERENCE q4_0-0 down relative_l2=0.000445997
+126: q4_0-0 down            rows  4 experts 3  ref_rms 0.2977  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq1_s-0 gate/up rows=4 mmq_ms=0.01573 fp16_dequant_gemm_ms=0.04925
+126: FP16_REFERENCE iq1_s-0 gate/up relative_l2=0.000385435
+126: iq1_s-0 gate/up        rows  4 experts 3  ref_rms 0.6361  rel_l2 0.00072  max/rms 0.0033  zero row 0
+126: TIMING iq1_s-0 down rows=4 mmq_ms=0.01516 fp16_dequant_gemm_ms=0.05530
+126: FP16_REFERENCE iq1_s-0 down relative_l2=0.000347446
+126: iq1_s-0 down           rows  4 experts 3  ref_rms 0.384  rel_l2 0.00068  max/rms 0.0031  zero row 0
+126: TIMING q2_K-0 gate/up rows=4 mmq_ms=0.01594 fp16_dequant_gemm_ms=0.05140
+126: FP16_REFERENCE q2_K-0 gate/up relative_l2=0.000724059
+126: q2_K-0 gate/up         rows  4 experts 3  ref_rms 0.3938  rel_l2 0.00098  max/rms 0.0051  zero row 0
+126: TIMING q2_K-0 down rows=4 mmq_ms=0.01577 fp16_dequant_gemm_ms=0.05819
+126: FP16_REFERENCE q2_K-0 down relative_l2=0.000468329
+126: q2_K-0 down            rows  4 experts 3  ref_rms 0.3498  rel_l2 0.00059  max/rms 0.0027  zero row 0
+126: TIMING q3_K-0 gate/up rows=4 mmq_ms=0.01731 fp16_dequant_gemm_ms=0.05448
+126: FP16_REFERENCE q3_K-0 gate/up relative_l2=0.000806006
+126: q3_K-0 gate/up         rows  4 experts 3  ref_rms 0.3558  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q3_K-0 down rows=4 mmq_ms=0.01719 fp16_dequant_gemm_ms=0.06113
+126: FP16_REFERENCE q3_K-0 down relative_l2=0.000536915
+126: q3_K-0 down            rows  4 experts 3  ref_rms 0.3065  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_K-0 gate/up rows=4 mmq_ms=0.01525 fp16_dequant_gemm_ms=0.04638
+126: FP16_REFERENCE q4_K-0 gate/up relative_l2=0.000921212
+126: q4_K-0 gate/up         rows  4 experts 3  ref_rms 0.3126  rel_l2 0.00145  max/rms 0.0057  zero row 0
+126: TIMING q4_K-0 down rows=4 mmq_ms=0.01536 fp16_dequant_gemm_ms=0.05284
+126: FP16_REFERENCE q4_K-0 down relative_l2=0.000560515
+126: q4_K-0 down            rows  4 experts 3  ref_rms 0.2991  rel_l2 0.00089  max/rms 0.0039  zero row 0
+126: TIMING q5_K-0 gate/up rows=4 mmq_ms=0.01577 fp16_dequant_gemm_ms=0.05669
+126: FP16_REFERENCE q5_K-0 gate/up relative_l2=0.000925075
+126: q5_K-0 gate/up         rows  4 experts 3  ref_rms 0.3111  rel_l2 0.00121  max/rms 0.0046  zero row 0
+126: TIMING q5_K-0 down rows=4 mmq_ms=0.01597 fp16_dequant_gemm_ms=0.06287
+126: FP16_REFERENCE q5_K-0 down relative_l2=0.000563193
+126: q5_K-0 down            rows  4 experts 3  ref_rms 0.295  rel_l2 0.00079  max/rms 0.0040  zero row 0
+126: TIMING iq3_xxs-0 gate/up rows=4 mmq_ms=0.01832 fp16_dequant_gemm_ms=0.04792
+126: FP16_REFERENCE iq3_xxs-0 gate/up relative_l2=0.000753615
+126: iq3_xxs-0 gate/up      rows  4 experts 3  ref_rms 0.3617  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_xxs-0 down rows=4 mmq_ms=0.01843 fp16_dequant_gemm_ms=0.05508
+126: FP16_REFERENCE iq3_xxs-0 down relative_l2=0.000474048
+126: iq3_xxs-0 down         rows  4 experts 3  ref_rms 0.3313  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-0 gate/up rows=4 mmq_ms=0.01700 fp16_dequant_gemm_ms=0.04731
+126: FP16_REFERENCE iq2_xxs-0 gate/up relative_l2=0.000421782
+126: iq2_xxs-0 gate/up      rows  4 experts 3  ref_rms 0.6085  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-0 down rows=4 mmq_ms=0.01679 fp16_dequant_gemm_ms=0.05416
+126: FP16_REFERENCE iq2_xxs-0 down relative_l2=0.000392086
+126: iq2_xxs-0 down         rows  4 experts 3  ref_rms 0.3796  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-0 gate/up rows=4 mmq_ms=0.01751 fp16_dequant_gemm_ms=0.04905
+126: FP16_REFERENCE iq2_s-0 gate/up relative_l2=0.000666825
+126: iq2_s-0 gate/up        rows  4 experts 3  ref_rms 0.3863  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-0 down rows=4 mmq_ms=0.01751 fp16_dequant_gemm_ms=0.05620
+126: FP16_REFERENCE iq2_s-0 down relative_l2=0.000437321
+126: iq2_s-0 down           rows  4 experts 3  ref_rms 0.3369  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-0 gate/up rows=4 mmq_ms=0.01874 fp16_dequant_gemm_ms=0.04822
+126: FP16_REFERENCE iq3_s-0 gate/up relative_l2=0.000740639
+126: iq3_s-0 gate/up        rows  4 experts 3  ref_rms 0.3544  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-0 down rows=4 mmq_ms=0.01833 fp16_dequant_gemm_ms=0.05519
+126: FP16_REFERENCE iq3_s-0 down relative_l2=0.00048091
+126: iq3_s-0 down           rows  4 experts 3  ref_rms 0.3242  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-0 gate/up rows=4 mmq_ms=0.01546 fp16_dequant_gemm_ms=0.04915
+126: FP16_REFERENCE iq4_xs-0 gate/up relative_l2=0.000861334
+126: iq4_xs-0 gate/up       rows  4 experts 3  ref_rms 0.3181  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-0 down rows=4 mmq_ms=0.01556 fp16_dequant_gemm_ms=0.05567
+126: FP16_REFERENCE iq4_xs-0 down relative_l2=0.000541718
+126: iq4_xs-0 down          rows  4 experts 3  ref_rms 0.3001  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-0 gate/up rows=4 mmq_ms=0.02007 fp16_dequant_gemm_ms=0.04749
+126: FP16_REFERENCE q8_0-0 gate/up relative_l2=0.000909506
+126: q8_0-0 gate/up         rows  4 experts 3  ref_rms 0.3096  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-0 down rows=4 mmq_ms=0.02099 fp16_dequant_gemm_ms=0.05342
+126: FP16_REFERENCE q8_0-0 down relative_l2=0.00056515
+126: q8_0-0 down            rows  4 experts 3  ref_rms 0.2956  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-1 gate/up rows=25 mmq_ms=0.02025 fp16_dequant_gemm_ms=0.05168
+126: FP16_REFERENCE q4_0-1 gate/up relative_l2=0.000752272
+126: q4_0-1 gate/up         rows 25 experts 3  ref_rms 0.35  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-1 down rows=25 mmq_ms=0.02015 fp16_dequant_gemm_ms=0.05192
+126: FP16_REFERENCE q4_0-1 down relative_l2=0.000486139
+126: q4_0-1 down            rows 25 experts 3  ref_rms 0.3142  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq1_s-1 gate/up rows=25 mmq_ms=0.02035 fp16_dequant_gemm_ms=0.05366
+126: FP16_REFERENCE iq1_s-1 gate/up relative_l2=0.000362115
+126: iq1_s-1 gate/up        rows 25 experts 3  ref_rms 0.7208  rel_l2 0.00070  max/rms 0.0029  zero row 0
+126: TIMING iq1_s-1 down rows=25 mmq_ms=0.02007 fp16_dequant_gemm_ms=0.05519
+126: FP16_REFERENCE iq1_s-1 down relative_l2=0.000367924
+126: iq1_s-1 down           rows 25 experts 3  ref_rms 0.4073  rel_l2 0.00072  max/rms 0.0037  zero row 0
+126: TIMING q2_K-1 gate/up rows=25 mmq_ms=0.02140 fp16_dequant_gemm_ms=0.05660
+126: FP16_REFERENCE q2_K-1 gate/up relative_l2=0.000751922
+126: q2_K-1 gate/up         rows 25 experts 3  ref_rms 0.4371  rel_l2 0.00096  max/rms 0.0042  zero row 0
+126: TIMING q2_K-1 down rows=25 mmq_ms=0.02099 fp16_dequant_gemm_ms=0.05755
+126: FP16_REFERENCE q2_K-1 down relative_l2=0.000497451
+126: q2_K-1 down            rows 25 experts 3  ref_rms 0.3761  rel_l2 0.00065  max/rms 0.0029  zero row 0
+126: TIMING q3_K-1 gate/up rows=25 mmq_ms=0.02130 fp16_dequant_gemm_ms=0.06009
+126: FP16_REFERENCE q3_K-1 gate/up relative_l2=0.000818457
+126: q3_K-1 gate/up         rows 25 experts 3  ref_rms 0.3947  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q3_K-1 down rows=25 mmq_ms=0.02161 fp16_dequant_gemm_ms=0.06083
+126: FP16_REFERENCE q3_K-1 down relative_l2=0.000575725
+126: q3_K-1 down            rows 25 experts 3  ref_rms 0.3234  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_K-1 gate/up rows=25 mmq_ms=0.01823 fp16_dequant_gemm_ms=0.05148
+126: FP16_REFERENCE q4_K-1 gate/up relative_l2=0.000955092
+126: q4_K-1 gate/up         rows 25 experts 3  ref_rms 0.3435  rel_l2 0.00148  max/rms 0.0067  zero row 0
+126: TIMING q4_K-1 down rows=25 mmq_ms=0.01864 fp16_dequant_gemm_ms=0.05243
+126: FP16_REFERENCE q4_K-1 down relative_l2=0.000603145
+126: q4_K-1 down            rows 25 experts 3  ref_rms 0.3139  rel_l2 0.00094  max/rms 0.0042  zero row 0
+126: TIMING q5_K-1 gate/up rows=25 mmq_ms=0.01935 fp16_dequant_gemm_ms=0.06185
+126: FP16_REFERENCE q5_K-1 gate/up relative_l2=0.000963001
+126: q5_K-1 gate/up         rows 25 experts 3  ref_rms 0.3393  rel_l2 0.00129  max/rms 0.0058  zero row 0
+126: TIMING q5_K-1 down rows=25 mmq_ms=0.01987 fp16_dequant_gemm_ms=0.06308
+126: FP16_REFERENCE q5_K-1 down relative_l2=0.000609123
+126: q5_K-1 down            rows 25 experts 3  ref_rms 0.3112  rel_l2 0.00082  max/rms 0.0041  zero row 0
+126: TIMING iq3_xxs-1 gate/up rows=25 mmq_ms=0.02171 fp16_dequant_gemm_ms=0.05323
+126: FP16_REFERENCE iq3_xxs-1 gate/up relative_l2=0.000765665
+126: iq3_xxs-1 gate/up      rows 25 experts 3  ref_rms 0.402  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_xxs-1 down rows=25 mmq_ms=0.02129 fp16_dequant_gemm_ms=0.05448
+126: FP16_REFERENCE iq3_xxs-1 down relative_l2=0.000505294
+126: iq3_xxs-1 down         rows 25 experts 3  ref_rms 0.3486  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-1 gate/up rows=25 mmq_ms=0.02058 fp16_dequant_gemm_ms=0.05270
+126: FP16_REFERENCE iq2_xxs-1 gate/up relative_l2=0.000435405
+126: iq2_xxs-1 gate/up      rows 25 experts 3  ref_rms 0.6775  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-1 down rows=25 mmq_ms=0.02038 fp16_dequant_gemm_ms=0.05396
+126: FP16_REFERENCE iq2_xxs-1 down relative_l2=0.000410751
+126: iq2_xxs-1 down         rows 25 experts 3  ref_rms 0.412  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-1 gate/up rows=25 mmq_ms=0.02150 fp16_dequant_gemm_ms=0.05434
+126: FP16_REFERENCE iq2_s-1 gate/up relative_l2=0.000669834
+126: iq2_s-1 gate/up        rows 25 experts 3  ref_rms 0.4302  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-1 down rows=25 mmq_ms=0.02109 fp16_dequant_gemm_ms=0.05557
+126: FP16_REFERENCE iq2_s-1 down relative_l2=0.000451658
+126: iq2_s-1 down           rows 25 experts 3  ref_rms 0.3637  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-1 gate/up rows=25 mmq_ms=0.02231 fp16_dequant_gemm_ms=0.05375
+126: FP16_REFERENCE iq3_s-1 gate/up relative_l2=0.000763989
+126: iq3_s-1 gate/up        rows 25 experts 3  ref_rms 0.3924  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-1 down rows=25 mmq_ms=0.02243 fp16_dequant_gemm_ms=0.05509
+126: FP16_REFERENCE iq3_s-1 down relative_l2=0.000506301
+126: iq3_s-1 down           rows 25 experts 3  ref_rms 0.3451  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-1 gate/up rows=25 mmq_ms=0.01915 fp16_dequant_gemm_ms=0.05393
+126: FP16_REFERENCE iq4_xs-1 gate/up relative_l2=0.000890166
+126: iq4_xs-1 gate/up       rows 25 experts 3  ref_rms 0.3506  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-1 down rows=25 mmq_ms=0.01935 fp16_dequant_gemm_ms=0.05530
+126: FP16_REFERENCE iq4_xs-1 down relative_l2=0.000570017
+126: iq4_xs-1 down          rows 25 experts 3  ref_rms 0.3172  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-1 gate/up rows=25 mmq_ms=0.02489 fp16_dequant_gemm_ms=0.05221
+126: FP16_REFERENCE q8_0-1 gate/up relative_l2=0.000964757
+126: q8_0-1 gate/up         rows 25 experts 3  ref_rms 0.3374  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-1 down rows=25 mmq_ms=0.02550 fp16_dequant_gemm_ms=0.05354
+126: FP16_REFERENCE q8_0-1 down relative_l2=0.000604885
+126: q8_0-1 down            rows 25 experts 3  ref_rms 0.3113  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-2 gate/up rows=97 mmq_ms=0.03533 fp16_dequant_gemm_ms=0.07332
+126: FP16_REFERENCE q4_0-2 gate/up relative_l2=0.000740155
+126: q4_0-2 gate/up         rows 97 experts 3  ref_rms 0.3602  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-2 down rows=97 mmq_ms=0.03523 fp16_dequant_gemm_ms=0.09298
+126: FP16_REFERENCE q4_0-2 down relative_l2=0.000478645
+126: q4_0-2 down            rows 97 experts 3  ref_rms 0.3199  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq1_s-2 gate/up rows=97 mmq_ms=0.03195 fp16_dequant_gemm_ms=0.07793
+126: FP16_REFERENCE iq1_s-2 gate/up relative_l2=0.000363214
+126: iq1_s-2 gate/up        rows 97 experts 3  ref_rms 0.7372  rel_l2 0.00071  max/rms 0.0034  zero row 0
+126: TIMING iq1_s-2 down rows=97 mmq_ms=0.03113 fp16_dequant_gemm_ms=0.09738
+126: FP16_REFERENCE iq1_s-2 down relative_l2=0.000372238
+126: iq1_s-2 down           rows 97 experts 3  ref_rms 0.4154  rel_l2 0.00072  max/rms 0.0039  zero row 0
+126: TIMING q2_K-2 gate/up rows=97 mmq_ms=0.03911 fp16_dequant_gemm_ms=0.08192
+126: FP16_REFERENCE q2_K-2 gate/up relative_l2=0.000741002
+126: q2_K-2 gate/up         rows 97 experts 3  ref_rms 0.4431  rel_l2 0.00097  max/rms 0.0045  zero row 0
+126: TIMING q2_K-2 down rows=97 mmq_ms=0.03891 fp16_dequant_gemm_ms=0.10107
+126: FP16_REFERENCE q2_K-2 down relative_l2=0.000496439
+126: q2_K-2 down            rows 97 experts 3  ref_rms 0.3803  rel_l2 0.00065  max/rms 0.0033  zero row 0
+126: TIMING q3_K-2 gate/up rows=97 mmq_ms=0.03697 fp16_dequant_gemm_ms=0.08704
+126: FP16_REFERENCE q3_K-2 gate/up relative_l2=0.000808254
+126: q3_K-2 gate/up         rows 97 experts 3  ref_rms 0.4064  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q3_K-2 down rows=97 mmq_ms=0.03624 fp16_dequant_gemm_ms=0.10651
+126: FP16_REFERENCE q3_K-2 down relative_l2=0.000576751
+126: q3_K-2 down            rows 97 experts 3  ref_rms 0.3289  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_K-2 gate/up rows=97 mmq_ms=0.03591 fp16_dequant_gemm_ms=0.07434
+126: FP16_REFERENCE q4_K-2 gate/up relative_l2=0.000939059
+126: q4_K-2 gate/up         rows 97 experts 3  ref_rms 0.3539  rel_l2 0.00148  max/rms 0.0066  zero row 0
+126: TIMING q4_K-2 down rows=97 mmq_ms=0.03533 fp16_dequant_gemm_ms=0.09309
+126: FP16_REFERENCE q4_K-2 down relative_l2=0.00059285
+126: q4_K-2 down            rows 97 experts 3  ref_rms 0.3195  rel_l2 0.00096  max/rms 0.0047  zero row 0
+126: TIMING q5_K-2 gate/up rows=97 mmq_ms=0.03809 fp16_dequant_gemm_ms=0.09019
+126: FP16_REFERENCE q5_K-2 gate/up relative_l2=0.000948357
+126: q5_K-2 gate/up         rows 97 experts 3  ref_rms 0.3498  rel_l2 0.00127  max/rms 0.0062  zero row 0
+126: TIMING q5_K-2 down rows=97 mmq_ms=0.03797 fp16_dequant_gemm_ms=0.10893
+126: FP16_REFERENCE q5_K-2 down relative_l2=0.000606146
+126: q5_K-2 down            rows 97 experts 3  ref_rms 0.3168  rel_l2 0.00083  max/rms 0.0045  zero row 0
+126: TIMING iq3_xxs-2 gate/up rows=97 mmq_ms=0.03482 fp16_dequant_gemm_ms=0.07770
+126: FP16_REFERENCE iq3_xxs-2 gate/up relative_l2=0.00076313
+126: iq3_xxs-2 gate/up      rows 97 experts 3  ref_rms 0.4137  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_xxs-2 down rows=97 mmq_ms=0.03410 fp16_dequant_gemm_ms=0.09708
+126: FP16_REFERENCE iq3_xxs-2 down relative_l2=0.000510608
+126: iq3_xxs-2 down         rows 97 experts 3  ref_rms 0.3541  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-2 gate/up rows=97 mmq_ms=0.03195 fp16_dequant_gemm_ms=0.07608
+126: FP16_REFERENCE iq2_xxs-2 gate/up relative_l2=0.000431625
+126: iq2_xxs-2 gate/up      rows 97 experts 3  ref_rms 0.6917  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-2 down rows=97 mmq_ms=0.03121 fp16_dequant_gemm_ms=0.09571
+126: FP16_REFERENCE iq2_xxs-2 down relative_l2=0.000412008
+126: iq2_xxs-2 down         rows 97 experts 3  ref_rms 0.4173  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-2 gate/up rows=97 mmq_ms=0.03676 fp16_dequant_gemm_ms=0.07857
+126: FP16_REFERENCE iq2_s-2 gate/up relative_l2=0.000666733
+126: iq2_s-2 gate/up        rows 97 experts 3  ref_rms 0.4401  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-2 down rows=97 mmq_ms=0.03584 fp16_dequant_gemm_ms=0.09789
+126: FP16_REFERENCE iq2_s-2 down relative_l2=0.000451713
+126: iq2_s-2 down           rows 97 experts 3  ref_rms 0.3692  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-2 gate/up rows=97 mmq_ms=0.03561 fp16_dequant_gemm_ms=0.07741
+126: FP16_REFERENCE iq3_s-2 gate/up relative_l2=0.000755634
+126: iq3_s-2 gate/up        rows 97 experts 3  ref_rms 0.4046  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-2 down rows=97 mmq_ms=0.03458 fp16_dequant_gemm_ms=0.09738
+126: FP16_REFERENCE iq3_s-2 down relative_l2=0.000502903
+126: iq3_s-2 down           rows 97 experts 3  ref_rms 0.3512  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-2 gate/up rows=97 mmq_ms=0.03382 fp16_dequant_gemm_ms=0.07762
+126: FP16_REFERENCE iq4_xs-2 gate/up relative_l2=0.000880999
+126: iq4_xs-2 gate/up       rows 97 experts 3  ref_rms 0.3617  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-2 down rows=97 mmq_ms=0.03266 fp16_dequant_gemm_ms=0.09728
+126: FP16_REFERENCE iq4_xs-2 down relative_l2=0.000572829
+126: iq4_xs-2 down          rows 97 experts 3  ref_rms 0.3233  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-2 gate/up rows=97 mmq_ms=0.04045 fp16_dequant_gemm_ms=0.07659
+126: FP16_REFERENCE q8_0-2 gate/up relative_l2=0.000948472
+126: q8_0-2 gate/up         rows 97 experts 3  ref_rms 0.3481  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-2 down rows=97 mmq_ms=0.03942 fp16_dequant_gemm_ms=0.09510
+126: FP16_REFERENCE q8_0-2 down relative_l2=0.000603831
+126: q8_0-2 down            rows 97 experts 3  ref_rms 0.3169  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-3 gate/up rows=128 mmq_ms=0.04055 fp16_dequant_gemm_ms=0.03594
+126: FP16_REFERENCE q4_0-3 gate/up relative_l2=0.000742024
+126: q4_0-3 gate/up         rows 128 experts 1  ref_rms 0.3608  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_0-3 down rows=128 mmq_ms=0.03686 fp16_dequant_gemm_ms=0.03749
+126: FP16_REFERENCE q4_0-3 down relative_l2=0.000484977
+126: q4_0-3 down            rows 128 experts 1  ref_rms 0.3191  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq1_s-3 gate/up rows=128 mmq_ms=0.04247 fp16_dequant_gemm_ms=0.03604
+126: FP16_REFERENCE iq1_s-3 gate/up relative_l2=0.000360294
+126: iq1_s-3 gate/up        rows 128 experts 1  ref_rms 0.7379  rel_l2 0.00070  max/rms 0.0031  zero row 0
+126: TIMING iq1_s-3 down rows=128 mmq_ms=0.03676 fp16_dequant_gemm_ms=0.03768
+126: FP16_REFERENCE iq1_s-3 down relative_l2=0.00037238
+126: iq1_s-3 down           rows 128 experts 1  ref_rms 0.4144  rel_l2 0.00072  max/rms 0.0038  zero row 0
+126: TIMING q2_K-3 gate/up rows=128 mmq_ms=0.07662 fp16_dequant_gemm_ms=0.03717
+126: FP16_REFERENCE q2_K-3 gate/up relative_l2=0.000736159
+126: q2_K-3 gate/up         rows 128 experts 1  ref_rms 0.447  rel_l2 0.00096  max/rms 0.0045  zero row 0
+126: TIMING q2_K-3 down rows=128 mmq_ms=0.05424 fp16_dequant_gemm_ms=0.03930
+126: FP16_REFERENCE q2_K-3 down relative_l2=0.000497197
+126: q2_K-3 down            rows 128 experts 1  ref_rms 0.3815  rel_l2 0.00064  max/rms 0.0029  zero row 0
+126: TIMING q3_K-3 gate/up rows=128 mmq_ms=0.04990 fp16_dequant_gemm_ms=0.03911
+126: FP16_REFERENCE q3_K-3 gate/up relative_l2=0.000793635
+126: q3_K-3 gate/up         rows 128 experts 1  ref_rms 0.4068  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q3_K-3 down rows=128 mmq_ms=0.04140 fp16_dequant_gemm_ms=0.04085
+126: FP16_REFERENCE q3_K-3 down relative_l2=0.000576865
+126: q3_K-3 down            rows 128 experts 1  ref_rms 0.3282  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q4_K-3 gate/up rows=128 mmq_ms=0.04308 fp16_dequant_gemm_ms=0.03471
+126: FP16_REFERENCE q4_K-3 gate/up relative_l2=0.000940673
+126: q4_K-3 gate/up         rows 128 experts 1  ref_rms 0.3555  rel_l2 0.00146  max/rms 0.0061  zero row 0
+126: TIMING q4_K-3 down rows=128 mmq_ms=0.03612 fp16_dequant_gemm_ms=0.03666
+126: FP16_REFERENCE q4_K-3 down relative_l2=0.000598911
+126: q4_K-3 down            rows 128 experts 1  ref_rms 0.319  rel_l2 0.00095  max/rms 0.0049  zero row 0
+126: TIMING q5_K-3 gate/up rows=128 mmq_ms=0.04354 fp16_dequant_gemm_ms=0.03973
+126: FP16_REFERENCE q5_K-3 gate/up relative_l2=0.000953354
+126: q5_K-3 gate/up         rows 128 experts 1  ref_rms 0.3513  rel_l2 0.00127  max/rms 0.0063  zero row 0
+126: TIMING q5_K-3 down rows=128 mmq_ms=0.03809 fp16_dequant_gemm_ms=0.04178
+126: FP16_REFERENCE q5_K-3 down relative_l2=0.000610364
+126: q5_K-3 down            rows 128 experts 1  ref_rms 0.3162  rel_l2 0.00082  max/rms 0.0041  zero row 0
+126: TIMING iq3_xxs-3 gate/up rows=128 mmq_ms=0.04311 fp16_dequant_gemm_ms=0.03571
+126: FP16_REFERENCE iq3_xxs-3 gate/up relative_l2=0.000743952
+126: iq3_xxs-3 gate/up      rows 128 experts 1  ref_rms 0.4163  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_xxs-3 down rows=128 mmq_ms=0.03736 fp16_dequant_gemm_ms=0.03748
+126: FP16_REFERENCE iq3_xxs-3 down relative_l2=0.000509651
+126: iq3_xxs-3 down         rows 128 experts 1  ref_rms 0.3542  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-3 gate/up rows=128 mmq_ms=0.04209 fp16_dequant_gemm_ms=0.03553
+126: FP16_REFERENCE iq2_xxs-3 gate/up relative_l2=0.000423767
+126: iq2_xxs-3 gate/up      rows 128 experts 1  ref_rms 0.6946  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_xxs-3 down rows=128 mmq_ms=0.03617 fp16_dequant_gemm_ms=0.03720
+126: FP16_REFERENCE iq2_xxs-3 down relative_l2=0.00041052
+126: iq2_xxs-3 down         rows 128 experts 1  ref_rms 0.4179  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-3 gate/up rows=128 mmq_ms=0.05017 fp16_dequant_gemm_ms=0.03645
+126: FP16_REFERENCE iq2_s-3 gate/up relative_l2=0.000661469
+126: iq2_s-3 gate/up        rows 128 experts 1  ref_rms 0.4432  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq2_s-3 down rows=128 mmq_ms=0.03962 fp16_dequant_gemm_ms=0.03801
+126: FP16_REFERENCE iq2_s-3 down relative_l2=0.00045046
+126: iq2_s-3 down           rows 128 experts 1  ref_rms 0.3694  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-3 gate/up rows=128 mmq_ms=0.04411 fp16_dequant_gemm_ms=0.03561
+126: FP16_REFERENCE iq3_s-3 gate/up relative_l2=0.00074147
+126: iq3_s-3 gate/up        rows 128 experts 1  ref_rms 0.407  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq3_s-3 down rows=128 mmq_ms=0.03858 fp16_dequant_gemm_ms=0.03779
+126: FP16_REFERENCE iq3_s-3 down relative_l2=0.00050444
+126: iq3_s-3 down           rows 128 experts 1  ref_rms 0.351  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-3 gate/up rows=128 mmq_ms=0.04116 fp16_dequant_gemm_ms=0.03574
+126: FP16_REFERENCE iq4_xs-3 gate/up relative_l2=0.000892309
+126: iq4_xs-3 gate/up       rows 128 experts 1  ref_rms 0.3626  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING iq4_xs-3 down rows=128 mmq_ms=0.03592 fp16_dequant_gemm_ms=0.03795
+126: FP16_REFERENCE iq4_xs-3 down relative_l2=0.000571831
+126: iq4_xs-3 down          rows 128 experts 1  ref_rms 0.3222  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-3 gate/up rows=128 mmq_ms=0.04393 fp16_dequant_gemm_ms=0.03521
+126: FP16_REFERENCE q8_0-3 gate/up relative_l2=0.000941358
+126: q8_0-3 gate/up         rows 128 experts 1  ref_rms 0.349  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: TIMING q8_0-3 down rows=128 mmq_ms=0.03860 fp16_dequant_gemm_ms=0.03727
+126: FP16_REFERENCE q8_0-3 down relative_l2=0.000606776
+126: q8_0-3 down            rows 128 experts 1  ref_rms 0.3162  rel_l2 0.00000  max/rms 0.0000  zero row 0
+126: Ornith MMQ screen passed
+1/1 Test #126: ornith_mmq_test ..................   Passed  154.11 sec
+
+The following tests passed:
+	ornith_mmq_test
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) = 154.12 sec

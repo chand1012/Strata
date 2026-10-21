@@ -13,8 +13,8 @@ hashes of all three files. Keep both Bartowski shards together and pass the firs
 
 The initial configuration targets one NVIDIA GPU with 24 GB VRAM and a host with 64 GB RAM. It uses 8K context,
 one request at a time, text only, eight CPU threads, a 32-token prompt chunk and MTP disabled. Greedy sampling
-is the helper's initial default; it is not a recommendation from the model's author. No vision or MTP support
-is claimed by this addition.
+is the helper's initial default; it is not a recommendation from the model's author. Experimental greedy MTP
+has a separate [validation report](validation/ORNITH-MTP.md). Vision has not been validated.
 
 ## Build and prepare
 
@@ -58,11 +58,11 @@ LlamaSwap or terminate other applications.
   stay compressed in RAM and VRAM.
 * The default prompt path remains the grouped compatibility path. Opt-in MMQ handles gate and up independently
   when their types differ, including their activation-quantization layouts. Unsupported layers retain the grouped
-  path without disabling MMQ for the other layers.
+  path without disabling MMQ for the other layers. The Q4_0 MTP experts in the Bartowski file are included.
 * The optional integer-dot decoder reads compressed weights directly. IQ2_XXS and IQ2_S keep fractional scale
   terms in this path. Existing callers retain their original arithmetic.
 * With MMQ enabled, streaming buffers cover the largest eligible active layer. A disabled MTP block does not
-  enlarge those buffers; its weights and cache placement remain loaded.
+  enlarge those buffers unless the compact MTP control is enabled for matched comparisons; its weights remain loaded.
 
 This path is intended for CUDA. HIP and SYCL have not been validated. The normal fused expert paths do not
 select the compatibility kernel unless the Ornith flag is set. CUDA graph capture and CPU/GPU routing still use
@@ -71,7 +71,7 @@ the existing engine scheduler.
 ## Performance controls
 
 These controls are opt-in and specific to the Ornith compatibility path. The build must include the matching
-`libstrata_kq.so` beside the engine; this change uses version 2 of that library's internal ABI.
+`libstrata_kq.so` beside the engine; this change uses version 3 of that library's internal ABI.
 
 | Environment variable | Behavior |
 | --- | --- |
@@ -79,6 +79,9 @@ These controls are opt-in and specific to the Ornith compatibility path. The bui
 | `STRATA_ORNITH_DECODE=3` | Enable direct integer-dot expert projections. An unset value retains the compatibility kernel. |
 | `STRATA_ORNITH_REBALANCE=N` | Rotate the starting layer of decode cache replacement and age all layer scores. Allow up to N replacements every 32 tokens, capped at 512. Unset or zero preserves the original scheduler. |
 | `STRATA_ORNITH_PCIE=N` | Send at most N missed experts per layer to the GPU during single-token decoding, capped at 8. Requires pinned host weights and reserves a small staging buffer. Unset or zero leaves misses on the CPU. |
+| `STRATA_ORNITH_MTP_COMPACT=1` | Size the two prompt buffers separately for the isolated MTP pass. Retain the same capacity with MTP off for matched controls. |
+| `STRATA_ORNITH_MTP_CACHE=1` | Keep draft-layer slots fixed and exclude draft routing from the main cache replacement budget. Align speculative state with serial decoding at output limits and end tokens. |
+| `STRATA_ORNITH_PCIE_ROWS=1` | Apply the PCIe miss limit per token in batches of up to eight rows, including MTP verification. Reserves extra bounded staging; requires `STRATA_ORNITH_PCIE` above zero. |
 | `STRATA_ORNITH_PROFILE=1` | Print synchronized stage timings and streamed byte counts. This diagnostic changes overlap and must not be used for speed claims. |
 | `STRATA_ORNITH_TRACE=1` | Start a CUDA profiler capture after engine warm-up. Use with Nsight Systems' CUDA profiler API capture range. |
 
@@ -106,6 +109,19 @@ LlamaSwap, checks GPU idleness, enforces a 56 GiB no-swap scope, excludes a warm
 reuse. It records inputs, outputs, binary/library hashes, first-token latency, engine timings, and resource samples.
 It requires Linux, a systemd user session, `nvidia-smi`, the repository Python dependencies, and LlamaSwap (URL can
 be set with `--llamaswap`). Its default filler is synthetic repeated text; `--corpus` supplies other prompt material.
+
+## Experimental MTP
+
+The [MTP report](validation/ORNITH-MTP.md) compares one and two drafts with matched serial decoding and the
+previous performance profile. It includes repeated speed and memory measurements, exact output comparisons,
+and the failures that required fixes. MTP is not automatically faster on this machine.
+
+Use the complete tested profile from that report, including `STRATA_IQ_MT_MIN=1` on both the serial and MTP
+controls. This keeps CPU expert arithmetic consistent across verification batch sizes. Keep sampling greedy
+(temperature zero, repetition penalty one, frequency and presence penalties zero); requests that need
+sampling logits use serial decoding. The setup helper and existing performance profiles
+continue to disable MTP. `tools/compare_ornith_mtp.py` compares complete output token sequences from benchmark
+runs with identical input IDs.
 
 ## Validation
 
