@@ -1,7 +1,8 @@
 # Ornith validation — 2026-10-21
 
 This is the initial compatibility validation. Later opt-in optimization results are recorded in
-[the performance validation](ORNITH-PERFORMANCE.md).
+[the performance validation](ORNITH-PERFORMANCE.md). The latest [expert-residency experiment](ORNITH-RESIDENCY.md)
+compares Ornith with the Qwen control and documents task-specific gains without promoting a general preset.
 
 Tested on an RTX 3090 Ti (24 GiB VRAM), i7-10700 (8 physical cores) and 64 GB installed RAM
 (about 61 GiB usable). Built with CUDA 13.0.48 and GNU 13.3.0, for compute capability 8.6, from upstream
