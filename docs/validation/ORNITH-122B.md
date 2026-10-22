@@ -56,3 +56,5 @@ optimized mixed-format MMQ was not implemented in that compatibility build.
 
 The [machine-readable record](ornith-122b.json) contains prompts, output token IDs, outputs, engine protocol
 statistics, resource samples and the tested executable's SHA-256. See [setup instructions](../ORNITH.md).
+
+See the [packed-Q8 memory experiment](ORNITH-PACKED-Q8.md) for an existing-setting comparison on the optimized CUDA build.
