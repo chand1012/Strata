@@ -97,6 +97,9 @@ formats in the shared CPU backend. The build must include the matching
 | `STRATA_ORNITH_MTP_KV_ONLY=1` | During prompt processing compute only the MTP K/V state that survives into drafting. Requires isolated MTP cache policy. Also permits cache/workspace loans with MTP. |
 | `STRATA_ORNITH_MTP_SLOTS=N` | Cap draft-layer residency at 0–256 slots and return the remaining automatic budget to main layers. Keep the same cap in matched serial controls. |
 | `STRATA_ORNITH_DRAFT_VOCAB=1` | Enable the 3072-wide Q8 draft head for `--draft-vocab N`. Restricts draft proposals only; the main model still verifies against its full vocabulary. |
+| `STRATA_ORNITH_WIDE=N` | Experimental 3072-wide decode kernels; bit mask `1` for Q8 rows, `2` for shared gate/up, `4` for fused MoE output/normalization/quantization. `7` enables all three. Larger prompt GEMMs retain their existing path. |
+| `STRATA_ORNITH_CACHE_PROFILE=1` | Print per-layer committed decode routing counts and measured singleton CPU expert costs on exit, for offline calibration. Treat this as a diagnostic run. |
+| `STRATA_ORNITH_LAYER_SLOTS=...` | Explicit comma-separated cache slot counts for all 48 main layers, each 1–255. Requires Ornith hybrid, one text session, MTP off, and no explicit `--expert-slots`. Rejects allocations above the automatic cache byte budget. Counts remain fixed for the process; expert replacement remains adaptive. |
 | `STRATA_ORNITH_TELEMETRY=1` | Report singleton per-layer routing counts, existing CPU phase times and host route waits without adding device synchronization. Diagnostic runs are separate from speed measurements. |
 | `STRATA_ORNITH_PROFILE=1` | Print synchronized stage timings and streamed byte counts. This diagnostic changes overlap and must not be used for speed claims. |
 | `STRATA_ORNITH_TRACE=1` | Start a CUDA profiler capture after engine warm-up. Use with Nsight Systems' CUDA profiler API capture range. |
@@ -156,6 +159,17 @@ controls. This keeps CPU expert arithmetic consistent across verification batch 
 sampling logits use serial decoding. The setup helper and existing performance profiles
 continue to disable MTP. `tools/compare_ornith_mtp.py` compares complete output token sequences from benchmark
 runs with identical input IDs.
+
+The [wide-kernel and cache-allocation report](validation/ORNITH-WIDE.md) records the next optimization round.
+Wider decode fusion produced small gains without a measured prompt-throughput regression. Neither candidate
+met the response-time promotion threshold on every workload, so the existing optimized profiles were retained.
+Unequal cache allocation and higher PCIe ceilings did not improve the tested workloads. These flags remain
+experimental; adaptive output sequences can differ even when fixed-placement token comparisons are exact.
+
+To propose an unequal allocation, run representative calibration requests with `STRATA_ORNITH_CACHE_PROFILE=1`,
+save stderr, and run `python tools/ornith_cache_slots.py calibration.log --output allocation.json`. Test the
+resulting `STRATA_ORNITH_LAYER_SLOTS` value on separate workloads before using it. The saved allocation depends
+on the quantization, available VRAM and other settings; it is not portable to an arbitrary configuration.
 
 ## Validation
 

@@ -219,14 +219,15 @@ __global__ void __launch_bounds__(256) k_add_rms_q(float* x, const float* y, con
     }
 }
 
-/// k_moe_out for T <= 8 rows (decode, verify windows) with n <= 2048 and n % 256 == 0: 1024 threads per row instead of 256
+/// k_moe_out for T <= 8 rows (decode, verify windows) with n <= Capacity and n % 256 == 0: 1024 threads per row instead of 256
 /// (the elements' loads in parallel), the squares summed per old thread (element t, t + 256, ... in order) and the
 /// 256-wide tree as before: the same bits.  x += sum_k w_k part_k (+ gate * shared); h = rms(x) * wn; with hq the q8_1
 /// image of h as well (the next layer's input).
+template <int Capacity>
 __global__ void __launch_bounds__(1024) k_moe_out_small(float* x, const float* parts, const int32_t* prow, const float* wts,
                                                         int K_, const float* shared, const float* sgate, int sg_stride,
                                                         const float* wn, float* h, int n, float eps, QB* hq = nullptr) {
-    __shared__ float vv[2048];
+    __shared__ float vv[Capacity];
     __shared__ float sh[256];
     __shared__ const float* pk[16];
     const int t = blockIdx.x;

@@ -1262,6 +1262,9 @@ struct Engine {
     struct Hy {
         std::vector<int> slot_of, exp_in_slot;
         std::vector<double> score;   // routing counts, halved at each rebalance
+        std::vector<unsigned long long> profile_hits;
+        double profile_cpu_ms = 0;
+        unsigned long long profile_cpu_entries = 0;
         int32_t* slot_of_d = nullptr;
 #if defined(STRATA_Q36_CPU_POOL)
         strata::kernels::cpu::NativeFmt fmt;
@@ -1321,6 +1324,8 @@ struct Engine {
     // runs as throughput results.
     bool ornith_profile = false;
     bool ornith_telemetry = false;
+    bool cache_profile = false;
+    int ornith_wide = 0; // bit 0: Q8 rows; bit 1: shared gate/up; bit 2: MoE output
     bool workspace_borrowed = false;
     bool split_graph = false, capturing_prefix = false;
     std::vector<cudaGraphExec_t> prefix_graphs;
@@ -1359,6 +1364,14 @@ struct Engine {
     };
     std::vector<LayerTiming> layer_timing;
     void telemetry_report() const {
+        if (cache_profile && hy.size() >= m->layers.size()) for (size_t li = 0; li < m->layers.size(); ++li) {
+            const auto& H = hy[li]; const auto& L = m->layers[li];
+            std::fprintf(stderr, "ORNITH_CACHE layer=%zu bytes=%zu slots=%d cpu_ms=%.9g cpu_entries=%llu hits=",
+                         li, L.stride, L.n_slots, H.profile_cpu_ms, H.profile_cpu_entries);
+            for (size_t i=0;i<H.profile_hits.size();++i)
+                std::fprintf(stderr, "%s%llu", i ? "," : "", H.profile_hits[i]);
+            std::fprintf(stderr,"\n");
+        }
         if (!ornith_telemetry) return;
         for (size_t li = 0; li < layer_timing.size(); ++li) {
             const auto& t = layer_timing[li];
@@ -1390,7 +1403,11 @@ struct Engine {
         const int Kp = (int) m->top_k;
         for (size_t li = 0; li < row_ids.size() && li < hy.size(); ++li)
             if (!row_ids[li].empty())
-                for (int e = 0; e < n * Kp; ++e) hy[li].score[(size_t) row_ids[li][(size_t) e]] += 1.0;
+                for (int e = 0; e < n * Kp; ++e) {
+                    const size_t expert = (size_t)row_ids[li][(size_t)e];
+                    hy[li].score[expert] += 1.0;
+                    if (cache_profile && !warming) ++hy[li].profile_hits[expert];
+                }
     }
     void after_rows(int n) {   // a decode step / verify window kept n rows: count them, rebalance at the boundary
         if (!m->hybrid) return;
@@ -1454,6 +1471,16 @@ struct Engine {
         m = &model;
         const char* prof = std::getenv("STRATA_ORNITH_PROFILE");
         const char* telemetry = std::getenv("STRATA_ORNITH_TELEMETRY");
+        const char* cp = std::getenv("STRATA_ORNITH_CACHE_PROFILE");
+        cache_profile = model.layers[0].L.compatibility && cp && std::strcmp(cp,"1") == 0;
+        const char* wide = std::getenv("STRATA_ORNITH_WIDE");
+        if (model.layers[0].L.compatibility && wide) {
+            char* end = nullptr; const long value = std::strtol(wide, &end, 10);
+            if (!*wide || *end || value < 0 || value > 7) {
+                std::fprintf(stderr, "strata-q36: STRATA_ORNITH_WIDE must be 0 .. 7\n"); std::exit(1);
+            }
+            ornith_wide = (int)value;
+        }
         ornith_telemetry = model.layers[0].L.compatibility && telemetry && std::strcmp(telemetry, "1") == 0;
         layer_timing.resize(model.layers.size() + (model.has_mtp ? 1 : 0));
         const char* split = std::getenv("STRATA_ORNITH_SPLIT_GRAPH");
@@ -1767,14 +1794,15 @@ struct Engine {
         if (!fast_k || w.type != 8 || T < 1 || T > 8 || w.n_in % 32 != 0) return false;
         if (K::native_q8_0_packed_eligible(w.n_in, w.n_out) && K::native_q8_0_packed_enabled()) return false;
         const int nb = w.n_in / 32;
-        if (nb > 64) return false;
+        if (nb > 64 && (!(ornith_wide & 1) || nb != 96)) return false;
         const void* wp = w.d;
         const half* dpl = nullptr;
-        const int NJ = nb <= 32 ? 1 : 2;
+        const int NJ = nb <= 32 ? 1 : nb <= 64 ? 2 : 3;
 #define Q36_Q8(NCV)                                                                                          \
     case NCV:                                                                                                \
         if (NJ == 1) q36k::launch_q8_rows<NCV, 1, false>(wp, dpl, q, out, nb, w.n_out, st);                  \
-        else q36k::launch_q8_rows<NCV, 2, false>(wp, dpl, q, out, nb, w.n_out, st);                          \
+        else if (NJ == 2) q36k::launch_q8_rows<NCV, 2, false>(wp, dpl, q, out, nb, w.n_out, st);                          \
+        else q36k::launch_q8_rows<NCV, 3, false>(wp, dpl, q, out, nb, w.n_out, st);               \
         break;
         switch (T) { Q36_Q8(1) Q36_Q8(2) Q36_Q8(3) Q36_Q8(4) Q36_Q8(5) Q36_Q8(6) Q36_Q8(7) Q36_Q8(8) }
 #undef Q36_Q8
@@ -1842,8 +1870,8 @@ struct Engine {
         if (fast_k && T <= kGemmT) {
             if (verify_k) {
                 if (!vx_) {
-                    CK(cudaMalloc((void**) &vx_, (size_t) 8 * 2048 * 4));
-                    CK(cudaMalloc((void**) &vh_, (size_t) 8 * 2048 * 4));
+                    CK(cudaMalloc((void**) &vx_, (size_t) 8 * std::max<int64_t>(2048, m->g.n_embd) * 4));
+                    CK(cudaMalloc((void**) &vh_, (size_t) 8 * std::max<int64_t>(2048, m->g.n_embd) * 4));
                 }
                 CK(cudaMemcpyAsync(vx_, x, (size_t) T * N * 4, cudaMemcpyDeviceToDevice, st));
                 k_add_rms<<<T, kThreads, 0, st>>>(vx_, y, L.post_norm, vh_, N, m->eps);
@@ -1864,7 +1892,7 @@ struct Engine {
         const int FS = (int) m->g.n_ff_shexp;
         const Mat &a = L.sh_gate, &b = L.sh_up;
         if (!fast_k || T < 1 || T > 4 || a.type != 8 || b.type != 8 || a.n_in != b.n_in || a.n_out != FS || b.n_out != FS ||
-            a.n_in % 32 != 0 || a.n_in / 32 > 64 || a.n_in / 32 <= 32 || FS % 32 != 0 ||
+            a.n_in % 32 != 0 || (a.n_in / 32 > 64 && (!(ornith_wide & 2) || a.n_in != 3072)) || a.n_in / 32 <= 32 || FS % 32 != 0 ||
             (K::native_q8_0_packed_eligible(a.n_in, a.n_out) && K::native_q8_0_packed_enabled()))
             return false;
         const int nb = a.n_in / 32;
@@ -1876,7 +1904,10 @@ struct Engine {
         const half* db = nullptr;
 #define Q36_SH(NCV)                                                                                          \
     case NCV:                                                                                                \
-        if (pkd)                                                                                             \
+        if (nb == 96)                                                                                        \
+            q36k::k_sh_gu<NCV, 3, false><<<grid, 1024, 0, st>>>(wa, nullptr, wb, nullptr,                       \
+                (const q36k::QB*) xq, (q36k::QB*) q8, nb, FS);                                                 \
+        else if (pkd)                                                                                        \
             q36k::k_sh_gu<NCV, 2, true><<<grid, 1024, 0, st>>>(wa, da, wb, db, (const q36k::QB*) xq,        \
                                                                (q36k::QB*) q8, nb, FS);                      \
         else                                                                                                 \
@@ -2003,19 +2034,23 @@ struct Engine {
     /// The MoE block's end (k_moe_out) for T rows.
     void moe_end(int T, const int32_t* prow, const float* shared, const float* sgate, const float* wn, float* hout, int sgs = 1) {
         const int N = (int) m->g.n_embd, Kp = (int) m->top_k;
-        const bool small = fast_k && T <= 8 && N <= 2048 && N % 256 == 0 && Kp <= 15;
+        const bool small = fast_k && T <= 8 && (N <= 2048 || ((ornith_wide & 4) && N == 3072)) && N % 256 == 0 && Kp <= 15;
         if (small && verify_k) {
             if (!vx_) {
-                CK(cudaMalloc((void**) &vx_, (size_t) 8 * 2048 * 4));
-                CK(cudaMalloc((void**) &vh_, (size_t) 8 * 2048 * 4));
+                CK(cudaMalloc((void**) &vx_, (size_t) 8 * std::max<int64_t>(2048, m->g.n_embd) * 4));
+                CK(cudaMalloc((void**) &vh_, (size_t) 8 * std::max<int64_t>(2048, m->g.n_embd) * 4));
             }
             CK(cudaMemcpyAsync(vx_, x, (size_t) T * N * 4, cudaMemcpyDeviceToDevice, st));
             k_moe_out<<<T, kThreads, 0, st>>>(vx_, eparts, prow, ewts, Kp, shared, sgate, sgs, wn, vh_, N, m->eps);
         }
         if (small) {
             const bool mkq = wn != nullptr && hout == h;   // the next layer's input, quantized here
-            q36k::k_moe_out_small<<<T, 1024, 0, st>>>(x, eparts, prow, ewts, Kp, shared, sgate, sgs, wn, hout, N, m->eps,
-                                                      mkq ? (q36k::QB*) xq : nullptr);
+            if (N == 3072)
+                q36k::k_moe_out_small<3072><<<T, 1024, 0, st>>>(x, eparts, prow, ewts, Kp, shared, sgate, sgs, wn, hout, N, m->eps,
+                                                              mkq ? (q36k::QB*) xq : nullptr);
+            else
+                q36k::k_moe_out_small<2048><<<T, 1024, 0, st>>>(x, eparts, prow, ewts, Kp, shared, sgate, sgs, wn, hout, N, m->eps,
+                                                              mkq ? (q36k::QB*) xq : nullptr);
             xq_ready = mkq;
             if (verify_k) {
                 if (mkq) verify_q8("moe_out q8", hout, T, " T " + std::to_string(T));
@@ -2664,6 +2699,10 @@ struct Engine {
         if (cache_cost && T == 1 && !warming) {
             const double elapsed = pool->ms_multi_gu - gu0 + pool->ms_multi_q - q0 + pool->ms_multi_down - down0;
             expert_cpu_cost[li] = 0.9 * expert_cpu_cost[li] + 0.1 * elapsed / n_miss;
+        }
+        if (cache_profile && T == 1 && !warming) {
+            H.profile_cpu_ms += pool->ms_multi_gu - gu0 + pool->ms_multi_q - q0 + pool->ms_multi_down - down0;
+            H.profile_cpu_entries += (unsigned long long)n_miss;
         }
         hy_cpu_ms += ms_since(t0);
         CK(cudaMemcpyAsync(ecpu, cpu_out, (size_t) n_ent * N * 4, cudaMemcpyHostToDevice, st));
@@ -3415,7 +3454,29 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         if (!*cap || *end || value < 0 || value > ne) { err="MTP slots must be 0 .. expert count"; return false; }
         mtp_cap = (int)value;
     }
-    auto layer_slots = [&](size_t li, int count) { return li == m.layers.size() ? std::min(count,mtp_cap) : count; };
+    // Explicit calibrated main-layer counts; a fixed allocation for this process.
+    // Keep at least one slot and one miss-capable slot per layer, so all layers
+    // retain the same hybrid dispatch and graph/buffer lifetime rules.
+    std::vector<int> calibrated_slots;
+    const char* allocation = std::getenv("STRATA_ORNITH_LAYER_SLOTS");
+    if (allocation) {
+        if (!m.layers[0].L.compatibility || !E.main_hybrid || E.mtp_d || E.n_sess != 1 || E.vision || slots > 0) {
+            err = "layer slots require Ornith hybrid, MTP off, one text session and automatic expert budget"; return false;
+        }
+        const char* cursor = allocation;
+        for (size_t li=0;li<m.layers.size();++li) {
+            char* end = nullptr; const long count = std::strtol(cursor,&end,10);
+            if (end == cursor || count < 1 || count >= ne ||
+                (li+1 < m.layers.size() ? *end != ',' : *end != '\0')) {
+                err = "layer slots must list one count in 1 .. expert-count-minus-one for every main layer"; return false;
+            }
+            calibrated_slots.push_back((int)count); cursor = end + (li+1 < m.layers.size());
+        }
+    }
+    auto layer_slots = [&](size_t li, int count) {
+        if (li == m.layers.size()) return std::min(count,mtp_cap);
+        return calibrated_slots.empty() ? count : calibrated_slots[li];
+    };
     // --expert-slots: that many per layer (tests: the same split with and without the MTP block)
     int S = slots > 0 ? (int) std::min<int64_t>(ne, slots) : (int) std::min<size_t>((size_t) ne, slot_bytes / per_slot);
     auto arena_size = [&](int slots_per_layer) {
@@ -3423,7 +3484,15 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         for (size_t li=0;li<all.size();++li) bytes += aligned(all[li]->stride * (size_t)layer_slots(li,slots_per_layer) + kMmqTail);
         return bytes;
     };
-    if (slots <= 0 && mtp_cap < ne)
+    if (!calibrated_slots.empty() && arena_size(S) > slot_bytes) {
+        err = "calibrated layer slots exceed the automatic expert-cache byte budget"; return false;
+    }
+    if (!calibrated_slots.empty()) {
+        std::fprintf(stderr,"strata-q36: calibrated main-layer slots:");
+        for (int count : calibrated_slots) std::fprintf(stderr," %d",count);
+        std::fprintf(stderr,"\n");
+    }
+    if (slots <= 0 && mtp_cap < ne && calibrated_slots.empty())
         while (S < ne && arena_size(S+1) <= slot_bytes) ++S;
     size_t arena_bytes = 0;
     if (loan) {
@@ -3523,6 +3592,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             H.exp_in_slot[(size_t) s] = s;
         }
         H.score.assign((size_t) ne, 0.0);
+        if (E.cache_profile) H.profile_hits.assign((size_t)ne,0);
         CK(cudaMalloc(&H.slot_of_d, (size_t) ne * 4));
         CK(cudaMemcpy(H.slot_of_d, H.slot_of.data(), (size_t) ne * 4, cudaMemcpyHostToDevice));
         if (!C::native_fmt_mixed(L.L.gu_type, L.L.u_type < 0 ? L.L.gu_type : L.L.u_type, L.L.d_type, g.n_embd, g.n_ff, H.fmt, err)) return false;
