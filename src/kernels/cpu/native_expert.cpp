@@ -41,6 +41,15 @@ void init_once() {
     std::call_once(once, [] { ggml_cpu_init(); });
 }
 
+int ornith_q3_cpu() {
+    static const int mode = [] {
+        const char* v = std::getenv("STRATA_ORNITH_CPU_Q3");
+        if (!v || !cpu_avx2_ok() || !ggml_cpu_has_avx2() || ggml_cpu_has_avx512()) return 0;
+        return std::strcmp(v,"1") == 0 ? 1 : std::strcmp(v,"2") == 0 ? 2 : 0;
+    }();
+    return mode;
+}
+
 }  // namespace
 
 bool native_experts_available() noexcept { return true; }
@@ -57,7 +66,7 @@ bool iq256_supported(int type) noexcept {
     return type == 16 || type == 17 || type == 18 || type == 21 || type == 22 || type == 23;
 }
 
-bool kq256_supported(int type) noexcept { return type == 12 || type == 7 || type == 8; }
+bool kq256_supported(int type) noexcept { return type == 11 || type == 12 || type == 7 || type == 8; }
 
 bool native_fmt(int gu_type, int d_type, int64_t n_embd, int64_t n_ff, NativeFmt& f, std::string& err) {
     init_once();
@@ -228,6 +237,10 @@ void native_gu_rows(const NativeFmt& f, const uint8_t* blob, const void* const* 
         iq256_gu_rows_exact_one(f.gu_type, blob, f.gu_row, f.up_off, (int) f.n_embd, act[0], ff[0], r0, r1);
         return;
     }
+    if (f.gu_type == 11 && ornith_q3_cpu() && (nt > 1 || ornith_q3_cpu() == 1)) {
+        kq256_gu_rows(11, blob, f.gu_row, f.up_off, (int)f.n_embd, act, nt, ff, r0, r1);
+        return;
+    }
     const int mt_min = native_gu_mt_min(f.gu_type);   // #152
     // Unsloth UD-Q4_K_XL's Q4_K gate/up: the multi-token kernel is bit-exact against ggml's per-token dot (any group
     // size, no #152 rule).  Opt-in, STRATA_KQ256=1: measured no faster in the engine (a window's expert groups hold
@@ -326,6 +339,19 @@ void native_down_rows(const NativeFmt& f, const uint8_t* blob, const void* const
     static const bool avx1 = !cpu_avx2_ok() && cpu_avx1_ok() && std::getenv("STRATA_NO_IQ128") == nullptr;
     if (avx1 && iq128_down_supported(f.d_type)) {
         iq128_down_rows(f.d_type, blob + f.down_off, f.d_row, (int) f.n_ff, hq, nt, out, r0, r1);
+        return;
+    }
+    static const bool iq_down = [] {
+        const char* v=std::getenv("STRATA_ORNITH_CPU_IQ_DOWN");
+        return v && std::strcmp(v,"1")==0 && cpu_avx2_ok() && !cpu_avx512_ok() &&
+               ggml_cpu_has_avx2() && !ggml_cpu_has_avx512();
+    }();
+    if (iq_down && nt == 1 && (f.d_type==16 || f.d_type==17 || f.d_type==18 || f.d_type==21 || f.d_type==22)) {
+        iq256_rows_exact_one(f.d_type,blob+f.down_off,f.d_row,(int)f.n_ff,hq[0],out[0],r0,r1);
+        return;
+    }
+    if (f.d_type == 11 && ornith_q3_cpu() && (nt > 1 || ornith_q3_cpu() == 1)) {
+        kq256_rows(11, blob + f.down_off, f.d_row, (int)f.n_ff, hq, nt, out, r0, r1);
         return;
     }
     const int n = (int) f.n_ff;

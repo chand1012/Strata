@@ -16,6 +16,10 @@ bool iq256_supported(int ggml_type) noexcept;
 void iq256_gu_rows_exact_one(int ggml_type, const uint8_t* blob, size_t gu_row, size_t up_off, int n,
                              const void* act, float* ff, int r0, int r1);
 
+/// Singleton down rows with the same ggml AVX2 reduction order as exact gate/up.
+void iq256_rows_exact_one(int ggml_type, const uint8_t* w, size_t row_bytes, int n,
+                         const void* act, float* out, int r0, int r1);
+
 /// ff[t][r] = silu(gate_r . a[t]) * (up_r . a[t]), rows [r0, r1); gate rows at blob, up rows at blob + up_off.
 void iq256_gu_rows(int ggml_type, const uint8_t* blob, size_t gu_row, size_t up_off, int n, const void* const* act,
                    int nt, float* const* ff, int r0, int r1);

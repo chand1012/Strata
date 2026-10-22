@@ -486,6 +486,39 @@ void iq256_gu_rows_exact_one(int type, const uint8_t* blob, size_t gu_row, size_
         else plain::gu_ggml_one<22>(blob, gu_row, up_off, n, y, ff, r0, r1);
     }
 }
+void iq256_rows_exact_one(int type, const uint8_t* blob, size_t gu_row, int n,
+                             const void* act, float* ff, int r0, int r1) {
+    const auto* y = (const block_q8_K*) act;
+#if STRATA_AVXVNNI
+    if (vnni_on()) {
+        if (type == 16) vnni::rows_ggml_one<16>(blob, gu_row, n, y, ff, r0, r1);
+        else if (type == 17) vnni::rows_ggml_one<17>(blob, gu_row, n, y, ff, r0, r1);
+        else if (type == 18) {
+            if (iq256_variant() & kIq256Gather) vnni::rows_ggml_one<118>(blob, gu_row, n, y, ff, r0, r1);
+            else vnni::rows_ggml_one<18>(blob, gu_row, n, y, ff, r0, r1);
+        } else if (type == 21) {
+            if (iq256_variant() & kIq256Gather) vnni::rows_ggml_one<121>(blob, gu_row, n, y, ff, r0, r1);
+            else vnni::rows_ggml_one<21>(blob, gu_row, n, y, ff, r0, r1);
+        } else if (type == 22) {
+            if (iq256_variant() & kIq256Gather) vnni::rows_ggml_one<122>(blob, gu_row, n, y, ff, r0, r1);
+            else vnni::rows_ggml_one<22>(blob, gu_row, n, y, ff, r0, r1);
+        }
+        return;
+    }
+#endif
+    if (type == 16) plain::rows_ggml_one<16>(blob, gu_row, n, y, ff, r0, r1);
+    else if (type == 17) plain::rows_ggml_one<17>(blob, gu_row, n, y, ff, r0, r1);
+    else if (type == 18) {
+        if (iq256_variant() & kIq256Gather) plain::rows_ggml_one<118>(blob, gu_row, n, y, ff, r0, r1);
+        else plain::rows_ggml_one<18>(blob, gu_row, n, y, ff, r0, r1);
+    } else if (type == 21) {
+        if (iq256_variant() & kIq256Gather) plain::rows_ggml_one<121>(blob, gu_row, n, y, ff, r0, r1);
+        else plain::rows_ggml_one<21>(blob, gu_row, n, y, ff, r0, r1);
+    } else if (type == 22) {
+        if (iq256_variant() & kIq256Gather) plain::rows_ggml_one<122>(blob, gu_row, n, y, ff, r0, r1);
+        else plain::rows_ggml_one<22>(blob, gu_row, n, y, ff, r0, r1);
+    }
+}
 
 int iq256_variant() noexcept {
     // STRATA_IQ256_GATHER=0/1 for every core; unset, where the calling thread's core gathers faster (per thread: a

@@ -62,7 +62,7 @@ LlamaSwap or terminate other applications.
 * The optional integer-dot decoder reads compressed weights directly. IQ2_XXS and IQ2_S keep fractional scale
   terms in this path. Existing callers retain their original arithmetic.
 * With MMQ enabled, streaming buffers cover the largest eligible active layer. A disabled MTP block does not
-  enlarge those buffers unless the compact MTP control is enabled for matched comparisons; its weights remain loaded.
+  enlarge those buffers unless the compact MTP control is enabled for matched comparisons; its weights remain loaded unless `STRATA_ORNITH_TRIM_MTP=1` omits the unused block.
 
 This path is intended for CUDA. HIP and SYCL have not been validated. The normal fused expert paths do not
 select the compatibility kernel unless the Ornith flag is set. CUDA graph capture and CPU/GPU routing still use
@@ -70,7 +70,8 @@ the existing engine scheduler.
 
 ## Performance controls
 
-These controls are opt-in and specific to the Ornith compatibility path. The build must include the matching
+These opt-in controls are intended for the Ornith compatibility path. CPU kernel switches select matching
+formats in the shared CPU backend. The build must include the matching
 `libstrata_kq.so` beside the engine; this change uses version 3 of that library's internal ABI.
 
 | Environment variable | Behavior |
@@ -83,7 +84,20 @@ These controls are opt-in and specific to the Ornith compatibility path. The bui
 | `STRATA_ORNITH_MTP_CACHE=1` | Keep draft-layer slots fixed and exclude draft routing from the main cache replacement budget. Align speculative state with serial decoding at output limits and end tokens. |
 | `STRATA_ORNITH_PCIE_ROWS=1` | Apply the PCIe miss limit per token in batches of up to eight rows, including MTP verification. Reserves extra bounded staging; requires `STRATA_ORNITH_PCIE` above zero. |
 | `STRATA_ORNITH_PIN_HOST=1` | Pin the inference host thread to the physical core reserved by the CPU pool. Leave worker placement unchanged and restore the original affinity on exit. Requires the Ornith hybrid CPU pool. |
-| `STRATA_ORNITH_CACHE_LOAN=1` | Reuse the two prompt buffers as expert-cache space during generation. Requires MMQ on all main layers, MTP off, one text session, and at least eight hybrid rows. Overwritten slots are restored before the next cache read; this transfer counts toward response time. Experimental; see the [decode validation](validation/ORNITH-DECODE.md). |
+| `STRATA_ORNITH_CACHE_LOAN=1` | Reuse the two prompt buffers as expert-cache space during generation. Requires MMQ on all main layers, MTP off or isolated KV-only MTP, one text session, and at least eight hybrid rows. Overwritten slots are restored before the next cache read; this transfer counts toward response time. Experimental; see the [decode validation](validation/ORNITH-DECODE.md). |
+| `STRATA_ORNITH_TRIM_MTP=1` | Omit MTP weights, state and slots when `--mtp 0`. Do not use this for matched serial/MTP comparisons. |
+| `STRATA_ORNITH_COMPACT_CPU=1` | Size CPU merge buffers for hybrid/verification rows when every active layer can stream larger prompt chunks. |
+| `STRATA_ORNITH_WORKSPACE_LOAN=1` | Also lend prompt-only MMQ and attention buffers to the expert cache. Requires `CACHE_LOAN`; restores overwritten expert slots before use, including short prompt tails. |
+| `STRATA_ORNITH_SPLIT_GRAPH=1` | Capture each eligible main layer's GPU prefix, then run CPU experts and combine their results. CUDA, one text session, at most eight rows; honors `--no-graph`. |
+| `STRATA_ORNITH_PCIE_ASYNC=1` | Copy missed experts on a separate stream, with an event dependency before consuming them. Requires PCIe offload and pinned weights. |
+| `STRATA_ORNITH_PCIE_ADAPTIVE=1` | Choose a per-layer singleton offload count from measured CPU/GPU costs, bounded by `STRATA_ORNITH_PCIE`. Requires MTP off. Timing can change CPU/GPU placement and rounding. |
+| `STRATA_ORNITH_CACHE_COST=1` | Rank cache replacements across layers by estimated CPU cost saved per byte. Keeps the per-layer slot counts fixed. Requires MTP off; timing can change placement and rounding. |
+| `STRATA_ORNITH_CPU_Q3=1` or `2` | Experimental exact AVX2 Q3_K CPU rows. `1` includes singletons; `2` only uses the kernel for groups larger than one. Requires an AVX2 ggml reference build without AVX-512. |
+| `STRATA_ORNITH_CPU_IQ_DOWN=1` | Use the exact AVX2 singleton IQ down-projection reduction for supported IQ formats. Opt-in; not necessarily faster. |
+| `STRATA_ORNITH_MTP_KV_ONLY=1` | During prompt processing compute only the MTP K/V state that survives into drafting. Requires isolated MTP cache policy. Also permits cache/workspace loans with MTP. |
+| `STRATA_ORNITH_MTP_SLOTS=N` | Cap draft-layer residency at 0–256 slots and return the remaining automatic budget to main layers. Keep the same cap in matched serial controls. |
+| `STRATA_ORNITH_DRAFT_VOCAB=1` | Enable the 3072-wide Q8 draft head for `--draft-vocab N`. Restricts draft proposals only; the main model still verifies against its full vocabulary. |
+| `STRATA_ORNITH_TELEMETRY=1` | Report singleton per-layer routing counts, existing CPU phase times and host route waits without adding device synchronization. Diagnostic runs are separate from speed measurements. |
 | `STRATA_ORNITH_PROFILE=1` | Print synchronized stage timings and streamed byte counts. This diagnostic changes overlap and must not be used for speed claims. |
 | `STRATA_ORNITH_TRACE=1` | Start a CUDA profiler capture after engine warm-up. Use with Nsight Systems' CUDA profiler API capture range. |
 
@@ -113,6 +127,16 @@ quants on this machine. Unsloth's selected 256-output-token profile also enables
 it adds a refill pause after the first token and can change outputs through CPU/GPU rounding. Bartowski
 uses pinning alone. The report includes the clock variability, output comparisons and memory checks.
 
+The [next optimization validation](validation/ORNITH-NEXT.md) measures the newer profiles against those
+pinning/cache-loan profiles, using both 256- and 1024-token responses and reversed run order. On this machine,
+Unsloth reaches 23.1–24.6 tokens/s and Bartowski 20.3–22.9 tokens/s. Prompt throughput changes by less than 0.6%.
+Both profiles add unused-MTP trimming, compact CPU buffers, asynchronous PCIe copies, adaptive offload capped
+at four experts, and cost-based cache replacement. Bartowski also enables cache and prompt-workspace loans.
+MTP, split graphs and the new CPU kernels stay off because they did not improve the screened workload.
+Bartowski's cache refill adds a roughly 0.36-second token gap, even though total response time improves.
+The complete flags, memory accounting and numerical differences are in that report; these measurements do not
+establish unchanged accuracy across tasks. Setup defaults remain unchanged.
+
 The benchmark utility `tools/bench_ornith.py` runs exact-length chat prompts through the engine protocol. It accepts
 an engine command/environment JSON, the GGUF and its chat template, and a new output directory. It unloads
 LlamaSwap, checks GPU idleness, enforces a 56 GiB no-swap scope, excludes a warm-up request, and rejects prompt
@@ -138,9 +162,9 @@ runs with identical input IDs.
 Build and run the focused checks on an otherwise idle GPU:
 
 ```sh
-cmake --build build --target ornith_parity ornith_mmq_test pool_tasks_test pool_affinity_test native_grouped_parity \
+cmake --build build --target ornith_q3_test ornith_parity ornith_mmq_test pool_tasks_test pool_affinity_test native_grouped_parity \
   gguf_reader_test gguf_split_test gguf_geometry_test ornith_layout_test -j 6
-ctest --test-dir build -R '^(ornith_parity|ornith_integer_parity|ornith_mmq_test|pool_tasks_test|pool_affinity_test|native_grouped_parity|gguf_reader_test|gguf_split_test|gguf_geometry_test|ornith_layout_test)$' --output-on-failure
+ctest --test-dir build -R '^(ornith_q3_test|ornith_iq_mtp_dispatch|ornith_parity|ornith_integer_parity|ornith_mmq_test|pool_tasks_test|pool_affinity_test|native_grouped_parity|gguf_reader_test|gguf_split_test|gguf_geometry_test|ornith_layout_test)$' --output-on-failure
 ```
 
 `ornith_parity` checks the actual 3072/1024 expert geometry, IQ1_S/Q2_K, Q3_K, mixed Q4_K/Q5_K and IQ down

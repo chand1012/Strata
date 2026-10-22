@@ -69,6 +69,11 @@ inline float row_dot_ggml_one(const uint8_t* row, int nblocks, const block_q8_K*
 }
 
 template <int TY> STRATA_ROWS_FN
+void rows_ggml_one(const uint8_t* w, size_t row_bytes, int n, const block_q8_K* y, float* out, int r0, int r1) {
+    for (int r=r0;r<r1;++r) out[r]=row_dot_ggml_one<TY>(w+(size_t)r*row_bytes,n/QK_K,y);
+}
+
+template <int TY> STRATA_ROWS_FN
 void gu_ggml_one(const uint8_t* blob, size_t gu_row, size_t up_off, int n, const block_q8_K* y, float* ff,
                  int r0, int r1) {
     for (int r = r0; r < r1; ++r) {

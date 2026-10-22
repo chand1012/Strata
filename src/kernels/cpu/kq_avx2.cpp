@@ -10,6 +10,7 @@
 // to the bit (native_expert_parity checks it), whatever the number of tokens.  Unlike the i-quant kernels (#152)
 // the group size therefore never changes an answer.
 //
+// Q3_K rows below extend the same scheme for Ornith, behind STRATA_ORNITH_CPU_Q3.
 // The gain is the weight-side work and the weight bytes, read once per verify window instead of once per token.
 #include "strata/kernels/cpu/kq_avx2.hpp"
 
@@ -19,6 +20,7 @@
 
 #include <immintrin.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -80,6 +82,67 @@ alignas(32) const uint8_t k_shuffle[256] = {
     12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,
     14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15};
 inline __m256i get_scale_shuffle_k4(int i) { return _mm256_loadu_si256((const __m256i*) k_shuffle + i); }
+
+// Q3_K x Q8_K: the pinned ggml AVX2 integer reductions and FMA order,
+// with weight unpacking shared by tokens. No requantization of the weights.
+template<int NT>
+void q3k_dot(const block_q3_K* x, int nb, const void* const* act, float* res) {
+    const __m256i m3 = _mm256_set1_epi8(3), mone = _mm256_set1_epi8(1);
+    __m256 acc[NT];
+    for (int t = 0; t < NT; ++t) acc[t] = _mm256_setzero_ps();
+    for (int i = 0; i < nb; ++i) {
+        uint32_t aux[3]; std::memcpy(aux, x[i].scales, 12);
+        constexpr uint32_t m1 = 0x03030303, m2 = 0x0f0f0f0f;
+        __m128i sc = _mm_set_epi32(
+            ((aux[1] >> 4) & m2) | (((aux[2] >> 6) & m1) << 4),
+            ((aux[0] >> 4) & m2) | (((aux[2] >> 4) & m1) << 4),
+            (aux[1] & m2) | (((aux[2] >> 2) & m1) << 4),
+            (aux[0] & m2) | ((aux[2] & m1) << 4));
+        sc = _mm_sub_epi8(sc, _mm_set1_epi8(32));
+        const __m256i all = _mm256_cvtepi8_epi16(sc);
+        const __m256i hb = _mm256_loadu_si256((const __m256i*)x[i].hmask);
+        __m256i lo[8], hi[8], scale[8];
+        for (int j = 0; j < 2; ++j) {
+            const __m128i half = j ? _mm256_extracti128_si256(all, 1) : _mm256_castsi256_si128(all);
+            const __m256i scales = _mm256_insertf128_si256(_mm256_castsi128_si256(half), half, 1);
+            const __m256i bits = _mm256_loadu_si256((const __m256i*)(x[i].qs + j * 32));
+            for (int k = 0; k < 4; ++k) {
+                const int b = j * 4 + k;
+                lo[b] = _mm256_and_si256(_mm256_srli_epi16(bits, 2*k), m3);
+                hi[b] = _mm256_slli_epi16(_mm256_srli_epi16(_mm256_andnot_si256(hb, _mm256_slli_epi16(mone, b)), b), 2);
+                const __m128i sl = _mm_set1_epi16((short)((4*k) | ((4*k+1)<<8)));
+                const __m128i sh = _mm_set1_epi16((short)((4*k+2) | ((4*k+3)<<8)));
+                scale[b] = _mm256_shuffle_epi8(scales, _mm256_insertf128_si256(_mm256_castsi128_si256(sl), sh, 1));
+            }
+        }
+        const float xd = half_at(x+i, (int)(offsetof(block_q3_K, d)/2));
+        for (int t = 0; t < NT; ++t) {
+            const auto* y = (const block_q8_K*)act[t] + i;
+            __m256i sumi = _mm256_setzero_si256();
+            for (int j = 0; j < 2; ++j) {
+                __m256i prod[4];
+                for (int k = 0; k < 4; ++k) {
+                    const int b = j*4+k;
+                    const __m256i v = _mm256_loadu_si256((const __m256i*)(y->qs+b*32));
+                    prod[k] = _mm256_madd_epi16(scale[b], _mm256_sub_epi16(_mm256_maddubs_epi16(lo[b],v), _mm256_maddubs_epi16(hi[b],v)));
+                }
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(_mm256_add_epi32(prod[0],prod[1]), _mm256_add_epi32(prod[2],prod[3])));
+            }
+            acc[t] = _mm256_fmadd_ps(_mm256_set1_ps(y->d*xd), _mm256_cvtepi32_ps(sumi), acc[t]);
+        }
+    }
+    for (int t = 0; t < NT; ++t) res[t] = hsum_float_8(acc[t]);
+}
+void q3k_dot_nt(const block_q3_K* x, int nb, const void* const* act, int nt, float* res) {
+    for (int t = 0; t < nt; t += 4) {
+        switch (std::min(nt-t,4)) {
+            case 1: q3k_dot<1>(x,nb,act+t,res+t); break;
+            case 2: q3k_dot<2>(x,nb,act+t,res+t); break;
+            case 3: q3k_dot<3>(x,nb,act+t,res+t); break;
+            case 4: q3k_dot<4>(x,nb,act+t,res+t); break;
+        }
+    }
+}
 
 // ---- Q4_K x Q8_K (ggml_vec_dot_q4_K_q8_K, __AVX2__)
 void q4k_dot(const block_q4_K* x, int nb, const void* const* act, int nt, float* res) {
@@ -216,6 +279,7 @@ void q8_0_dot_nt(const block_q8_0* x, int nb, const void* const* act, int nt, fl
 
 void dot_rows(int type, const uint8_t* row, int n, const void* const* act, int nt, float* res) {
     switch (type) {
+        case 11: q3k_dot_nt((const block_q3_K*) row, n / QK_K, act, nt, res); break;
         case 12: q4k_dot((const block_q4_K*) row, n / QK_K, act, nt, res); break;
         case 7: q5_1_dot_nt((const block_q5_1*) row, n / QK5_1, act, nt, res); break;
         case 8: q8_0_dot_nt((const block_q8_0*) row, n / QK8_0, act, nt, res); break;
