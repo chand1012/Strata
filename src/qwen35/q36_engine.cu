@@ -30,6 +30,7 @@
 #if defined(STRATA_Q36_CPU_POOL)
 #include "strata/kernels/cpu/native_expert.hpp"
 #include "strata/kernels/cpu/pool.hpp"
+#include "ggml.h"
 #endif
 
 #include <cublas_v2.h>
@@ -863,6 +864,9 @@ struct Model {
     bool hybrid = false;                       // not every expert fits in VRAM: slots + the CPU pool
     // the packed Q8_0 decode copies (gguf weights, packed copy, bytes): given back when that lets every expert fit
     std::vector<std::tuple<const uint8_t*, uint8_t*, size_t>> packed;
+    // expert tensors re-encoded at load (a layer whose gate and up differ in type, as in bartowski's Ornith-1.5
+    // IQ3_XS: blk.47 gate IQ3_S, up / down Q5_K): the gate is brought to the up's type, which the kernels need
+    std::vector<std::vector<uint8_t>> transcoded;
     // the GGUF-native MTP block (blk.<n_layers>, loaded with --mtp): eh_proj over [enorm(e) | hnorm(h)], then an
     // attention + MoE layer, shared_head_norm, the main head
     bool has_mtp = false;
@@ -1067,21 +1071,52 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         const strata::TensorInfo* tg = find(L(l, "ffn_gate_exps.weight"), sg);
         const strata::TensorInfo* tu = find(L(l, "ffn_up_exps.weight"), su);
         const strata::TensorInfo* td = find(L(l, "ffn_down_exps.weight"), sd);
+        const uint8_t* gate_src = nullptr;
         if (tg->type != tu->type) {
+#if defined(STRATA_Q36_CPU_POOL)
+            // gate re-encoded to the up's type (dequantize, quantize again with ggml's own routines), once at load
+            const int64_t n_per = (int64_t) tg->shape[0] * (int64_t) tg->shape[1], ne = (int64_t) tg->shape[2];
+            const auto* fr = ggml_get_type_traits((ggml_type) tg->type);
+            if (!fr || !fr->to_float || (int64_t) tg->shape[0] % ggml_blck_size((ggml_type) tu->type) != 0) {
+                err = L(l, "ffn_gate_exps / ffn_up_exps differ in type, and the gate cannot be re-encoded");
+                return false;
+            }
+            const size_t src_row = ggml_row_size((ggml_type) tg->type, n_per), dst_row = ggml_row_size((ggml_type) tu->type, n_per);
+            std::vector<uint8_t> out((size_t) ne * dst_row);
+            const uint8_t* src = gm.shard(sg).tensor_data(*tg);
+            std::vector<std::thread> th;
+            const int nt = (int) std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+            for (int t = 0; t < nt; ++t)
+                th.emplace_back([&, t] {
+                    std::vector<float> f((size_t) n_per);
+                    for (int64_t e = t; e < ne; e += nt) {
+                        fr->to_float(src + (size_t) e * src_row, f.data(), n_per);
+                        ggml_quantize_chunk((ggml_type) tu->type, f.data(), out.data() + (size_t) e * dst_row, 0,
+                                            (int64_t) tg->shape[1], (int64_t) tg->shape[0], nullptr);
+                    }
+                });
+            for (auto& x : th) x.join();
+            std::fprintf(stderr, "strata-q36: %s: gate %s re-encoded as %s (the up's type)\n", L(l, "ffn_gate_exps").c_str(),
+                         tg->type_name(), tu->type_name());
+            m.transcoded.push_back(std::move(out));
+            gate_src = m.transcoded.back().data();
+#else
             err = L(l, "ffn_gate_exps / ffn_up_exps differ in type");
             return false;
+#endif
         }
-        if (!K::native_expert_supported((int) tg->type, (int) td->type, g.n_embd, g.n_ff)) {
-            err = L(l, "experts are ") + tg->type_name() + "/" + td->type_name() + ", which the native expert kernels " +
+        const int gu_type = (int) tu->type;
+        if (!K::native_expert_supported(gu_type, (int) td->type, g.n_embd, g.n_ff)) {
+            err = L(l, "experts are ") + tu->type_name() + "/" + td->type_name() + ", which the native expert kernels " +
                   "do not take (build with -DSTRATA_Q6K_EXPERTS=ON for Q6_K)";
             return false;
         }
-        y.L = K::native_expert_layout((int) tg->type, (int) td->type, g.n_embd, g.n_ff);
+        y.L = K::native_expert_layout(gu_type, (int) td->type, g.n_embd, g.n_ff);
         const size_t gsz = (size_t) g.n_ff * y.L.gu_row, dsz = (size_t) g.n_embd * y.L.d_row;
         // a stride in whole blocks of both parts' types (MMQ steps over the experts by blocks), 16-byte aligned
         const size_t al = lcm_sz(lcm_sz(block_bytes(y.L.gu_type), block_bytes(y.L.d_type)), 16);
         y.stride = (y.L.bytes + al - 1) / al * al;
-        y.src_g = gm.shard(sg).tensor_data(*tg);
+        y.src_g = gate_src ? gate_src : gm.shard(sg).tensor_data(*tg);
         y.src_u = gm.shard(su).tensor_data(*tu);
         y.src_d = gm.shard(sd).tensor_data(*td);
         y.src_gsz = gsz;

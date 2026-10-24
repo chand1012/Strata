@@ -15,8 +15,9 @@ namespace strata::kernels::cpu {
 
 /// Bytes of the largest quantized activation any native layer uses (2560 values as Q8_K: 10 x 292).
 inline constexpr size_t kNativeActBytes = 4096;
-/// Bytes of the largest quantized down activation (640 values as Q8_0: 20 x 34, or Q8_K 3 x 292).
-inline constexpr size_t kNativeHBytes = 1024;
+/// Bytes of the largest quantized down activation (640 values as Q8_0: 20 x 34, or Q8_K 3 x 292; Ornith-1.5's
+/// 1024 as Q8_K: 4 x 292 = 1168).
+inline constexpr size_t kNativeHBytes = 2048;
 
 /// One layer's native expert geometry.
 struct NativeFmt {
