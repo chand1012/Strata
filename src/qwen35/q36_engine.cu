@@ -1071,54 +1071,69 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         const strata::TensorInfo* tg = find(L(l, "ffn_gate_exps.weight"), sg);
         const strata::TensorInfo* tu = find(L(l, "ffn_up_exps.weight"), su);
         const strata::TensorInfo* td = find(L(l, "ffn_down_exps.weight"), sd);
-        const uint8_t* gate_src = nullptr;
-        if (tg->type != tu->type) {
+        // expert tensors the kernels / the prompt MMQ do not take as they are, re-encoded once at load (dequantize,
+        // quantize again with ggml's own routines) into memory the model keeps: a gate whose type differs from the
+        // up's (bartowski's Ornith-1.5 IQ3_XS, blk.47: gate IQ3_S, up / down Q5_K) to the up's type, and Q4_0 experts
+        // (that file's MTP block) to Q5_K, which the prompt MMQ takes (a Q4_0 layer turned the MMQ and with it the
+        // streamed prompt chunks off for the whole model)
+        auto recode = [&](const strata::TensorInfo* t, size_t sh, int to, const uint8_t*& out_src) -> bool {
 #if defined(STRATA_Q36_CPU_POOL)
-            // gate re-encoded to the up's type (dequantize, quantize again with ggml's own routines), once at load
-            const int64_t n_per = (int64_t) tg->shape[0] * (int64_t) tg->shape[1], ne = (int64_t) tg->shape[2];
-            const auto* fr = ggml_get_type_traits((ggml_type) tg->type);
-            if (!fr || !fr->to_float || (int64_t) tg->shape[0] % ggml_blck_size((ggml_type) tu->type) != 0) {
-                err = L(l, "ffn_gate_exps / ffn_up_exps differ in type, and the gate cannot be re-encoded");
-                return false;
-            }
-            const size_t src_row = ggml_row_size((ggml_type) tg->type, n_per), dst_row = ggml_row_size((ggml_type) tu->type, n_per);
+            const int64_t n_per = (int64_t) t->shape[0] * (int64_t) t->shape[1], ne = (int64_t) t->shape[2];
+            const auto* fr = ggml_get_type_traits((ggml_type) t->type);
+            if (!fr || !fr->to_float || (int64_t) t->shape[0] % ggml_blck_size((ggml_type) to) != 0) return false;
+            const size_t src_row = ggml_row_size((ggml_type) t->type, n_per), dst_row = ggml_row_size((ggml_type) to, n_per);
             std::vector<uint8_t> out((size_t) ne * dst_row);
-            const uint8_t* src = gm.shard(sg).tensor_data(*tg);
+            const uint8_t* src = gm.shard(sh).tensor_data(*t);
             std::vector<std::thread> th;
             const int nt = (int) std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-            for (int t = 0; t < nt; ++t)
-                th.emplace_back([&, t] {
+            for (int k = 0; k < nt; ++k)
+                th.emplace_back([&, k] {
                     std::vector<float> f((size_t) n_per);
-                    for (int64_t e = t; e < ne; e += nt) {
+                    for (int64_t e = k; e < ne; e += nt) {
                         fr->to_float(src + (size_t) e * src_row, f.data(), n_per);
-                        ggml_quantize_chunk((ggml_type) tu->type, f.data(), out.data() + (size_t) e * dst_row, 0,
-                                            (int64_t) tg->shape[1], (int64_t) tg->shape[0], nullptr);
+                        ggml_quantize_chunk((ggml_type) to, f.data(), out.data() + (size_t) e * dst_row, 0,
+                                            (int64_t) t->shape[1], (int64_t) t->shape[0], nullptr);
                     }
                 });
             for (auto& x : th) x.join();
-            std::fprintf(stderr, "strata-q36: %s: gate %s re-encoded as %s (the up's type)\n", L(l, "ffn_gate_exps").c_str(),
-                         tg->type_name(), tu->type_name());
+            std::fprintf(stderr, "strata-q36: %s: %s re-encoded as %s at load\n", t->name.c_str(), t->type_name(),
+                         ggml_type_name((ggml_type) to));
             m.transcoded.push_back(std::move(out));
-            gate_src = m.transcoded.back().data();
+            out_src = m.transcoded.back().data();
+            return true;
 #else
-            err = L(l, "ffn_gate_exps / ffn_up_exps differ in type");
+            (void) t; (void) sh; (void) to; (void) out_src;
             return false;
 #endif
+        };
+        const uint8_t *gate_src = nullptr, *up_src = nullptr, *down_src = nullptr;
+        int gu_type = (int) tu->type, d_type = (int) td->type;
+        constexpr int kQ4_0 = 2, kQ5_K = 13;
+        if (gu_type == kQ4_0 && g.n_embd % 256 == 0) {
+            if (!recode(tu, su, kQ5_K, up_src)) { err = L(l, "ffn_up_exps cannot be re-encoded"); return false; }
+            gu_type = kQ5_K;
         }
-        const int gu_type = (int) tu->type;
-        if (!K::native_expert_supported(gu_type, (int) td->type, g.n_embd, g.n_ff)) {
+        if (d_type == kQ4_0 && g.n_ff % 256 == 0) {
+            if (!recode(td, sd, kQ5_K, down_src)) { err = L(l, "ffn_down_exps cannot be re-encoded"); return false; }
+            d_type = kQ5_K;
+        }
+        if ((int) tg->type != gu_type && !recode(tg, sg, gu_type, gate_src)) {
+            err = L(l, "ffn_gate_exps / ffn_up_exps differ in type, and the gate cannot be re-encoded");
+            return false;
+        }
+        if (!K::native_expert_supported(gu_type, d_type, g.n_embd, g.n_ff)) {
             err = L(l, "experts are ") + tu->type_name() + "/" + td->type_name() + ", which the native expert kernels " +
                   "do not take (build with -DSTRATA_Q6K_EXPERTS=ON for Q6_K)";
             return false;
         }
-        y.L = K::native_expert_layout(gu_type, (int) td->type, g.n_embd, g.n_ff);
+        y.L = K::native_expert_layout(gu_type, d_type, g.n_embd, g.n_ff);
         const size_t gsz = (size_t) g.n_ff * y.L.gu_row, dsz = (size_t) g.n_embd * y.L.d_row;
         // a stride in whole blocks of both parts' types (MMQ steps over the experts by blocks), 16-byte aligned
         const size_t al = lcm_sz(lcm_sz(block_bytes(y.L.gu_type), block_bytes(y.L.d_type)), 16);
         y.stride = (y.L.bytes + al - 1) / al * al;
         y.src_g = gate_src ? gate_src : gm.shard(sg).tensor_data(*tg);
-        y.src_u = gm.shard(su).tensor_data(*tu);
-        y.src_d = gm.shard(sd).tensor_data(*td);
+        y.src_u = up_src ? up_src : gm.shard(su).tensor_data(*tu);
+        y.src_d = down_src ? down_src : gm.shard(sd).tensor_data(*td);
         y.src_gsz = gsz;
         y.src_dsz = dsz;
     }

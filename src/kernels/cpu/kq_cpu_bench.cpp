@@ -29,7 +29,7 @@ namespace cpu = strata::kernels::cpu;
 
 namespace {
 
-constexpr int64_t kH = 2560, kFF = 640;
+int64_t kH = 2560, kFF = 640;   // --h / --ff: another family's geometry (Ornith-1.5: 3072 / 1024)
 constexpr int kMaxT = 8;
 
 int type_of(const std::string& s) {
@@ -57,15 +57,13 @@ std::vector<std::string> split(const std::string& s) {
 void make_blob(const cpu::NativeFmt& f, uint8_t* blob, std::mt19937& rng) {
     std::normal_distribution<float> nd(0.f, 0.02f);
     std::vector<float> row((size_t) std::max(kH, kFF));
-    const auto* tg = ggml_get_type_traits_cpu((ggml_type) f.gu_type);
-    const auto* td = ggml_get_type_traits_cpu((ggml_type) f.d_type);
     for (int64_t r = 0; r < 2 * kFF; ++r) {
         for (int64_t i = 0; i < kH; ++i) row[(size_t) i] = nd(rng);
-        tg->from_float(row.data(), blob + (size_t) r * f.gu_row, kH);
+        ggml_quantize_chunk((ggml_type) f.gu_type, row.data(), blob + (size_t) r * f.gu_row, 0, 1, kH, nullptr);   // (the i-quants have no from_float)
     }
     for (int64_t r = 0; r < kH; ++r) {
         for (int64_t i = 0; i < kFF; ++i) row[(size_t) i] = nd(rng);
-        td->from_float(row.data(), blob + f.down_off + (size_t) r * f.d_row, kFF);
+        ggml_quantize_chunk((ggml_type) f.d_type, row.data(), blob + f.down_off + (size_t) r * f.d_row, 0, 1, kFF, nullptr);
     }
 }
 
@@ -85,6 +83,8 @@ int main(int argc, char** argv) {
         else if (a == "--threads" && more) threads = ints(argv[++i]);
         else if (a == "--nt" && more) nts = ints(argv[++i]);
         else if (a == "--mb" && more) mb = std::atoi(argv[++i]);
+        else if (a == "--h" && more) kH = std::atoll(argv[++i]);
+        else if (a == "--ff" && more) kFF = std::atoll(argv[++i]);
         else if (a == "--reps" && more) reps = std::max(1, std::atoi(argv[++i]));
         else if (a == "--ram-gbs" && more) ram = std::atof(argv[++i]);
         else {
