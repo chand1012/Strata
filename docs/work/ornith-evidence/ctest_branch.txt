@@ -1,0 +1,14 @@
+
+The following tests did not run:
+	139 - expert_multi_test (Skipped)
+	141 - native_hadamard_test (Skipped)
+	142 - tq_cpu_parity (Skipped)
+	143 - tq_cpu_parity_avx2 (Skipped)
+
+The following tests FAILED:
+	 82 - ple_parity (Failed)
+	121 - ggml_tq_overlay (Failed)
+	151 - isa_guard_check (Failed)
+Errors while running CTest
+Output from these tests are in: /home/chandler/Strata/build-cuda/Testing/Temporary/LastTest.log
+Use "--rerun-failed --output-on-failure" to re-run the failed cases verbosely.

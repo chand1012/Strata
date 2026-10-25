@@ -1,0 +1,20 @@
+4159ebe94f9af3dfa0adaa73fe3d01ad  /tmp/out_main-wt_default.txt
+[main-wt/default] speculation              42 rounds of 6, drafts accepted 7 of 120 (0.058), 1.17 tokens per round
+[main-wt/default] suffix drafts            7 windows, drafts accepted 7 of 18
+[main-wt/default] accepted per round       0:35 1:7 2:0 3:0 4:0 5:0
+d4484bd01d7ee3c88ebc44238b7299e4  /tmp/out_main-wt_lowvram.txt
+[main-wt/lowvram] speculation              42 rounds of 6, drafts accepted 7 of 120 (0.058), 1.17 tokens per round
+[main-wt/lowvram] suffix drafts            7 windows, drafts accepted 7 of 18
+[main-wt/lowvram] accepted per round       0:35 1:7 2:0 3:0 4:0 5:0
+8db8e7719733567f4d09e476436ef17c  /tmp/out_Strata_default.txt
+[Strata/default] speculation              42 rounds of 6, drafts accepted 7 of 120 (0.058), 1.17 tokens per round
+[Strata/default] suffix drafts            7 windows, drafts accepted 7 of 18
+[Strata/default] accepted per round       0:35 1:7 2:0 3:0 4:0 5:0
+39653f895beb9f97f2f2851b43481e11  /tmp/out_Strata_lowvram.txt
+[Strata/lowvram] speculation              42 rounds of 6, drafts accepted 7 of 120 (0.058), 1.17 tokens per round
+[Strata/lowvram] suffix drafts            7 windows, drafts accepted 7 of 18
+[Strata/lowvram] accepted per round       0:35 1:7 2:0 3:0 4:0 5:0
+/tmp/out_Strata_default.txt:output  : 19241 13 561 6511 314 14898 369 21047 13 561 6511 314 17163 369 23327 13 561 6511 314 32208 369 77916 13 561 6511 314 31868 369 35938 13 561 6511 314 279 24844 369 36492 13 561 6511 314 33741 369 44745 13 561 6511 314
+/tmp/out_Strata_lowvram.txt:output  : 19241 13 561 6511 314 14898 369 21047 13 561 6511 314 17163 369 23327 13 561 6511 314 32208 369 77916 13 561 6511 314 31868 369 35938 13 561 6511 314 279 24844 369 36492 13 561 6511 314 33741 369 44745 13 561 6511 314
+/tmp/out_main-wt_default.txt:output  : 19241 13 561 6511 314 14898 369 21047 13 561 6511 314 17163 369 23327 13 561 6511 314 32208 369 77916 13 561 6511 314 31868 369 35938 13 561 6511 314 279 24844 369 36492 13 561 6511 314 33741 369 44745 13 561 6511 314
+/tmp/out_main-wt_lowvram.txt:output  : 19241 13 561 6511 314 14898 369 21047 13 561 6511 314 17163 369 23327 13 561 6511 314 32208 369 77916 13 561 6511 314 31868 369 35938 13 561 6511 314 279 24844 369 36492 13 561 6511 314 33741 369 44745 13 561 6511 314
