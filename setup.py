@@ -92,6 +92,7 @@ WIN = os.name == "nt"
 # day.  Every file has a fixed size and SHA-256 too (REPO_PINS); a revision the repository no longer has stops the
 # download (download()), unless a tester sets STRATA_ALLOW_UNPINNED=1.
 HF_REVISIONS = {
+    "bartowski/Ornith-1.5-122B-GGUF": "a8bc08fa33fc3a3e79380bf661a84688c7ea0a50",                     # 2026-10-24 (IQ3_XS sha256 checked)
     "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",        # 2026-09-29
     "ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF": "99bb8f7f95c7aa7b24a36a7786a4f657b30f5d3d",   # 2026-10-07 (adds IQ3_S)
     "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF": "5348543e0147355ac9cbcb031184a3546350988e",  # 2026-09-29
@@ -653,6 +654,36 @@ OWN_PATH_FAMILIES = {
                # the 30 GDN layers (state_gb)
                "vision": True, "state_gb": 0.07}
 }
+# Ornith-1.5-122B (GGUF architecture qwen35moe, the Qwen3.5-122B-A10B shape: n_embd 3072, 48 layers, 256 experts of
+# width 1024, top-8): bartowski's GGUFs, split in two files.  The same engine path as Qwen3.6 (src/qwen35), which picks
+# the Ornith defaults from the geometry (docs/work/ORNITH_BENCH.md).  No vision encoder is offered for it yet.
+ORNITH_FILES = {
+    "Ornith-1.5-122B-IQ3_XS-00001-of-00002.gguf": (39844370240, "6fdffa7d675cc0cda9e3772f7007a8da4f5203f4237cae5e57813a922a1ad5c7"),
+    "Ornith-1.5-122B-IQ3_XS-00002-of-00002.gguf": (18020354752, "14253ffc3abf28909b7d6e6c4911fb504c5b8022224eb0e7f79f8a1154f9c75b"),
+}
+OWN_PATH_FAMILIES["ornith"] = {
+    "title": "Ornith-1.5-122B", "by": "Ornith AI; GGUFs by bartowski", "arch": "qwen35moe",
+    "about": "122B mixture of experts with 10B active (256 experts, top-8), the Qwen3.5-122B-A10B shape",
+    "hf": hf("bartowski/Ornith-1.5-122B-GGUF"), "file": "Ornith-1.5-122B-{q}-00001-of-00002.gguf", "shards": 2,
+    "hf_dir": "Ornith-1.5-122B-{q}/", "tag": "ornith-", "mmproj": "", "name": "ornith-1.5-122b",
+    "license": "see https://huggingface.co/ornith-ai/Ornith-1.5-122B",
+    # RAM: every expert pinned in RAM (48.2 GiB for IQ3_XS) plus the OS (measured on a 61 GB PC)
+    "models": {"IQ3_XS": {"about": "3.3-bit i-quant (58 GB in 2 files)", "ram_gb": 56}},
+    "sha256": ORNITH_FILES,
+    "kv_bytes_per_token": 13 * 2 * 256 * 2 * 4,   # 12 attention layers + the MTP block
+    "mtp": 1,                                     # 1 draft: measured best (19.3 tok/s vs 11.1 at 2, RTX 3090 Ti)
+    "vision": False, "state_gb": 0.2,
+    "launch": True,                               # offered by `strata launch` (the Terminal), not only the app
+}
+
+
+def own_path_files(fam: dict, q: str) -> list[str]:
+    """The model's file names: one, or every shard of a split GGUF (the first is the one the engine opens)."""
+    first = fam["file"].format(q=q)
+    n = fam.get("shards", 1)
+    return [first] if n <= 1 else [first.replace(f"00001-of-{n:05d}", f"{i:05d}-of-{n:05d}") for i in range(1, n + 1)]
+
+
 PREVIEW_FAMILIES = OWN_PATH_FAMILIES             # the earlier name (tools and tests that import it)
 
 # DeepSeek-V4.1-Flash (GGUF architecture deepseek41), Unsloth's UD-Q8_K_XL at the revision the port was checked against: a
@@ -7435,7 +7466,7 @@ def own_path_context(fam: dict, vram_gb: float) -> int:
 def own_path_size(fam: dict, ram: float) -> str:
     """The recommended size: the largest file whose RAM need this PC has (the smallest when none fits)."""
     fits = [m for m, d in fam["models"].items() if ram >= d["ram_gb"]]
-    return max(fits, key=lambda m: fam["sha256"][fam["file"].format(q=m)][0]) if fits else next(iter(fam["models"]))
+    return max(fits, key=lambda m: sum(fam["sha256"][f][0] for f in own_path_files(fam, m))) if fits else next(iter(fam["models"]))
 
 
 def own_path_vision(a, fam: dict, gpu: dict, hip: bool) -> str:
@@ -7445,7 +7476,9 @@ def own_path_vision(a, fam: dict, gpu: dict, hip: bool) -> str:
     default answer is yes; what is asked for with --vision gpu / cpu is kept, with a note (recommend, never force)."""
     asked = a.vision
     vram = float(gpu.get("vram_gb", 0.0))
-    if asked in ("no", "none"):
+    if asked in ("no", "none") or fam.get("vision") is False:   # (Ornith: no encoder offered yet)
+        if fam.get("vision") is False and asked in ("yes", "gpu", "cpu"):
+            warn(f"{fam['title']} has no image encoder in Strata yet: images off")
         return "none"
     if asked is None:
         from strata_control import vision_reader as VR
@@ -7485,7 +7518,7 @@ PARALLEL_SMALL_SHARE = 0.35     # a card that does not hold every expert: the sl
 def own_path_parallel_fits_all(fam: dict, model: str, vram_gb: float, ctx: int, n: int) -> bool:
     """True where every routed expert still sits in VRAM beside n slots' sessions (one more session than the slots: the
     solo path's own)."""
-    size = fam["sha256"][fam["file"].format(q=model)][0] / 1e9
+    size = sum(fam["sha256"][f][0] for f in own_path_files(fam, model)) / 1e9
     base = size * 0.93 + 4.5       # the routed experts + the dense weights and buffers (the file's 7% beyond them)
     return base + (n + 1) * own_path_parallel_slot_gb(fam, ctx) <= vram_gb
 
@@ -7561,7 +7594,7 @@ def install_own_path(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopte
     say()
     for i, m in enumerate(names, 1):
         d = fam["models"][m]
-        size = fam["sha256"][fam["file"].format(q=m)][0]
+        size = sum(fam["sha256"][f][0] for f in own_path_files(fam, m))
         fit = "" if ram >= d["ram_gb"] else f"   <- needs {d['ram_gb']} GB RAM, you have {ram:.0f}"
         say(f"  {i}) {m:10s} {d['about']}; download {size / 1e9:.1f} GB{fit}")
     rec = own_path_size(fam, ram)
@@ -7611,10 +7644,13 @@ def install_own_path(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopte
         warn(f"--rope-scaling / --kv / --resident-budget-gib / --low-ram are Flash-Next settings: {fam['title']} "
              "does not use them")
     folder = Path(a.gguf_dir) if a.gguf_dir else Path(a.models_dir) / tag
-    gguf = folder / fam["file"].format(q=model)
-    size = fam["sha256"][gguf.name][0]
-    part = gguf.with_name(gguf.name + ".part")
-    left = 0 if gguf.exists() and done(gguf) else (size - (part.stat().st_size if part.is_file() else 0)) / 1e9
+    gfiles = [folder / f for f in own_path_files(fam, model)]
+    gguf = gfiles[0]
+    left = 0
+    for gf in gfiles:
+        part = gf.with_name(gf.name + ".part")
+        if not (gf.exists() and done(gf)):
+            left += (fam["sha256"][gf.name][0] - (part.stat().st_size if part.is_file() else 0)) / 1e9
     if left and free_gb(folder) < left:
         fail(f"not enough free disk space in {folder}: need ~{left:.0f} GB, {free_gb(folder):.0f} GB free", ("use --data-dir on a bigger drive (strata launch --data-dir)" if CONTROL else "use --models-dir on a bigger drive"))
     if left and free_gb(folder) < left + 1:
@@ -7638,14 +7674,15 @@ def install_own_path(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopte
     ok("engine: the engine component (looked up when the model loads)" if CONTROL else f"engine: {eng / EXE}")
 
     step(5, f"downloading {fam['title']} {model}")
-    if gguf.exists() and done(gguf):
-        ok(f"{gguf.name} already downloaded")
-    else:
-        if a.gguf_dir:
-            fail(f"{gguf} is missing", f"put {gguf.name} in {folder}, or drop --gguf-dir to download it")
-        download(fam["hf"] + gguf.name, gguf)
-    verify_sha256(gguf, *fam["sha256"][gguf.name], own=bool(a.gguf_dir))
-    ok(f"model file: {gguf}")
+    for gf in gfiles:
+        if gf.exists() and (done(gf) or a.gguf_dir):   # the user's own file: its size + SHA-256 are checked below
+            ok(f"{gf.name} already downloaded")
+        else:
+            if a.gguf_dir:
+                fail(f"{gf} is missing", f"put {gf.name} in {folder}, or drop --gguf-dir to download it")
+            download(fam["hf"] + fam.get("hf_dir", "").format(q=model) + gf.name, gf)
+        verify_sha256(gf, *fam["sha256"][gf.name], own=bool(a.gguf_dir))
+    ok(f"model file: {gguf}" + (f" (+{len(gfiles) - 1} more part)" if len(gfiles) > 1 else ""))
     mmproj = folder / fam["mmproj"]
     if vision != "none":                               # the image encoder: Unsloth's mmproj, pinned, size + SHA-256 checked
         if mmproj.exists() and done(mmproj):

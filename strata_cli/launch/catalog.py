@@ -328,7 +328,7 @@ class Catalog:
         own = self.strata.own_families()                # Qwen3.6 is listed for the app; the Terminal's launch list is Flash-Next's
         dsv41 = None
         for fam in self.strata.model_table(hw):
-            if fam["family"] in own and not own[fam["family"]].get("multi_file"):
+            if fam["family"] in own and not (own[fam["family"]].get("multi_file") or own[fam["family"]].get("launch")):
                 continue
             for size in fam["sizes"]:
                 f = fit_on(size, hw.get("ram_gb"), vram)
@@ -352,7 +352,7 @@ class Catalog:
         models, families, _ctx, _src = self.tables()
         names = list(models)
         for fam_name, fam_d in families.items():       # DeepSeek-V4.1-Flash's size is not one of setup's MODELS
-            if fam_d.get("multi_file"):
+            if fam_d.get("multi_file") or fam_d.get("launch"):   # (Ornith-1.5: an own-path family the Terminal offers)
                 names += [m for m in self.strata.sizes_of(models, fam_name) if m not in names]
         match = next((n for n in names if n.lower() == model.lower()), None)
         if match is None:
@@ -388,6 +388,9 @@ class Catalog:
         hw = hw or self.hardware()
         if self.strata.multi_family(family):                   # DeepSeek-V4.1-Flash: the context the engine was checked at
             return int(getattr(self.strata.setup_module(), "DSV41_CONTEXT", 8192))
+        own = (getattr(self.strata.setup_module(), "OWN_PATH_FAMILIES", None) or {}).get(family)
+        if own and own.get("launch"):                          # Ornith-1.5: the context it was measured at (its sessions take
+            return 32768                                       # VRAM from the expert slots)
         if hw.get("mac") and hw.get("ram_gb"):                 # a Mac: the context by unified memory (strata_control/mac_fit.py)
             mac = self.strata.mac()
             if mac is not None:
