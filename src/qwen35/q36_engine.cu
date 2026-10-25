@@ -1121,11 +1121,12 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         // (to IQ4_XS gate/up and IQ4_NL down: 4.25 / 4.5 bits like Q4_0's 4.5, so the layer - and the prompt stream's
         // two staging buffers sized by the largest layer - does not grow, as it did with Q5_K)
         constexpr int kQ4_0 = 2, kIQ4_NL = 20, kIQ4_XS = 23;
-        if (gu_type == kQ4_0 && g.n_embd % 256 == 0) {
+        const bool ornith_geo = g.n_embd == 3072 && g.n_ff == 1024;   // other files keep their Q4_0 experts as before
+        if (ornith_geo && gu_type == kQ4_0 && g.n_embd % 256 == 0) {
             if (!recode(tu, su, kIQ4_XS, up_src)) { err = L(l, "ffn_up_exps cannot be re-encoded"); return false; }
             gu_type = kIQ4_XS;
         }
-        if (d_type == kQ4_0 && g.n_ff % 32 == 0) {
+        if (ornith_geo && d_type == kQ4_0 && g.n_ff % 32 == 0) {
             if (!recode(td, sd, kIQ4_NL, down_src)) { err = L(l, "ffn_down_exps cannot be re-encoded"); return false; }
             d_type = kIQ4_NL;
         }
