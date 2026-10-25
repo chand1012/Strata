@@ -2301,7 +2301,10 @@ struct Engine {
         const Hy& H = hy[(size_t) stream_seq[(size_t) i]];
         // fewer than half the experts resident (a 12 GB card): the one whole-layer copy is faster than many small ones
         // (RTX 3060, UD-Q4_K_XL at 37 of 256: pp2048 1970 whole vs 1540 in runs)
-        if (all || 2 * L.n_slots < ne) {
+        // STRATA_Q36_STREAM_RUNS=1: the runs copy at any slot count (the resident experts device to device, only the
+        // rest over PCIe); measured faster on a PCIe 3.0 RTX 3090 Ti with 53 of 256 resident (Ornith-1.5 IQ3_XS)
+        static const bool runs = [] { const char* v = std::getenv("STRATA_Q36_STREAM_RUNS"); return v && v[0] == '1'; }();
+        if (all || (!runs && 2 * L.n_slots < ne)) {
             CK(cudaMemcpyAsync(stage[b], L.hblobs, L.stride * (size_t) ne, cudaMemcpyHostToDevice, cst));
         } else {
             for (int x = 0; x < ne;) {
@@ -2329,7 +2332,29 @@ struct Engine {
             std::exit(1);
         }
         const int b = stream_pos % 2;
+        // STRATA_Q36_STREAM_PROF=1 (debug): the time the main stream waits for each layer's copy, summed per forward
+        static const bool prof = std::getenv("STRATA_Q36_STREAM_PROF") != nullptr;
+        if (prof) {
+            if (sp_ev.empty()) { sp_ev.resize(2 * 64); for (auto& e : sp_ev) CK(cudaEventCreate(&e)); }
+            CK(cudaEventRecord(sp_ev[(size_t) 2 * stream_pos], st));
+        }
         CK(cudaStreamWaitEvent(st, ev_copy[b], 0));
+        if (prof) {
+            CK(cudaEventRecord(sp_ev[(size_t) 2 * stream_pos + 1], st));
+            if (stream_pos + 1 == (int) stream_seq.size()) {
+                CK(cudaEventSynchronize(sp_ev[(size_t) 2 * stream_pos + 1]));
+                float tot = 0.f, first = 0.f, span = 0.f;
+                for (int i = 0; i <= stream_pos; ++i) {
+                    float ms = 0.f;
+                    CK(cudaEventElapsedTime(&ms, sp_ev[(size_t) 2 * i], sp_ev[(size_t) 2 * i + 1]));
+                    tot += ms;
+                    if (i == 0) first = ms;
+                }
+                CK(cudaEventElapsedTime(&span, sp_ev[0], sp_ev[(size_t) 2 * stream_pos + 1]));
+                std::fprintf(stderr, "strata-q36: stream prof: %d layers, wait %.1f ms (first %.1f), span %.1f ms\n",
+                             stream_pos + 1, tot, first, span);
+            }
+        }
         return stage[b];
     }
     void stream_done() {
@@ -2387,7 +2412,7 @@ struct Engine {
             if (cudaMalloc(&fbuf, smax * kFetchMax + kMmqTail) != cudaSuccess || cudaMalloc(&ftab_d, 2 * ftab_bytes) != cudaSuccess) {
                 (void) cudaGetLastError();
                 std::fprintf(stderr, "strata-q36: STRATA_Q36_FETCH: no VRAM for the fetch buffer, off\n");
-                setenv("STRATA_Q36_FETCH", "0", 1);
+                    fetch_off = true;
                 fbuf = nullptr;
                 return;
             }
@@ -2438,6 +2463,8 @@ struct Engine {
         hy_fetch += nf;
     }
     int64_t hy_fetch = 0;
+    bool fetch_off = false;
+    std::vector<cudaEvent_t> sp_ev;
     void moe_hybrid_cpu(size_t li, int T) {
 #if defined(STRATA_Q36_CPU_POOL)
         namespace C = strata::kernels::cpu;
@@ -2454,7 +2481,7 @@ struct Engine {
         // runs the rest - PCIe and the CPU work at once instead of the CPU alone.  Off: as before.
         std::vector<char> fetched((size_t) g.n_expert, 0);
         static const double fetch_frac = [] { const char* v = std::getenv("STRATA_Q36_FETCH"); return v ? std::atof(v) : 0.0; }();
-        if (fetch_frac > 0.0) fetch_misses(L, H, T, fetch_frac, fetched);
+        if (fetch_frac > 0.0 && !fetch_off) fetch_misses(L, H, T, fetch_frac, fetched);
         // the missed entries per expert (up to MAXT tokens per job)
         jobs.clear();
         std::vector<char> quantized((size_t) T, 0);
@@ -4028,6 +4055,27 @@ int strata::qwen35::run(int argc, char** argv) {
         }
     }
     if (model.empty()) { std::fprintf(stderr, "strata-q36: --model is required\n"); return 2; }
+    auto env_default = [](const char* k, const char* v) {   // set unless the user did
+#if defined(_WIN32)
+        if (std::getenv(k) == nullptr) _putenv_s(k, v);
+#else
+        setenv(k, v, 0);
+#endif
+    };
+    {   // Ornith-1.5-122B (qwen35moe at n_embd 3072, expert width 1024): its measured defaults, each one only where the
+        // user did not set it (RTX 3090 Ti, PCIe 3.0, i7-10700: docs/work/ORNITH_BENCH.md).  Other geometries: unchanged.
+        strata::GgufModel probe = strata::GgufModel::open(model);
+        strata::core::ModelGeometry pg;
+        int64_t pk = 0;
+        std::string perr;
+        if (strata::core::geometry_from_gguf(probe.meta(), pg, pk, perr) && pg.n_embd == 3072 && pg.n_ff == 1024) {
+            env_default("STRATA_Q8_PACKED", "0");         // the VRAM for 9 more expert slots per layer instead
+            env_default("STRATA_Q36_STREAM_RUNS", "1");   // prompt chunks copy only the non-resident experts
+            env_default("STRATA_Q36_FETCH", "0.5");       // half the missed experts over PCIe beside the CPU pool
+            std::fprintf(stderr, "strata-q36: Ornith-1.5 geometry: its measured defaults (STRATA_Q8_PACKED=0, "
+                         "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5; set any to override)\n");
+        }
+    }
 #if !defined(_WIN32)
     setenv("CUDA_MODULE_LOADING", "EAGER", 0);   // every kernel loaded with the context, not in the first prompt
     setenv("STRATA_Q8_PACKED", "1", 0);   // the packed Q8_0 decode copy unless STRATA_Q8_PACKED is set otherwise
