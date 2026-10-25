@@ -38,6 +38,9 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 #include <cctype>
 #include <atomic>
 #include <chrono>
@@ -1108,14 +1111,16 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         };
         const uint8_t *gate_src = nullptr, *up_src = nullptr, *down_src = nullptr;
         int gu_type = (int) tu->type, d_type = (int) td->type;
-        constexpr int kQ4_0 = 2, kQ5_K = 13;
+        // (to IQ4_XS gate/up and IQ4_NL down: 4.25 / 4.5 bits like Q4_0's 4.5, so the layer - and the prompt stream's
+        // two staging buffers sized by the largest layer - does not grow, as it did with Q5_K)
+        constexpr int kQ4_0 = 2, kIQ4_NL = 20, kIQ4_XS = 23;
         if (gu_type == kQ4_0 && g.n_embd % 256 == 0) {
-            if (!recode(tu, su, kQ5_K, up_src)) { err = L(l, "ffn_up_exps cannot be re-encoded"); return false; }
-            gu_type = kQ5_K;
+            if (!recode(tu, su, kIQ4_XS, up_src)) { err = L(l, "ffn_up_exps cannot be re-encoded"); return false; }
+            gu_type = kIQ4_XS;
         }
-        if (d_type == kQ4_0 && g.n_ff % 256 == 0) {
-            if (!recode(td, sd, kQ5_K, down_src)) { err = L(l, "ffn_down_exps cannot be re-encoded"); return false; }
-            d_type = kQ5_K;
+        if (d_type == kQ4_0 && g.n_ff % 32 == 0) {
+            if (!recode(td, sd, kIQ4_NL, down_src)) { err = L(l, "ffn_down_exps cannot be re-encoded"); return false; }
+            d_type = kIQ4_NL;
         }
         // STRATA_Q36_RECODE_DOWN=T / STRATA_Q36_RECODE_GU=T (debug): every expert down / gate+up re-encoded as ggml type T
         if (const char* e = std::getenv("STRATA_Q36_RECODE_DOWN"); e && down_src == nullptr && l < 4) {
@@ -2349,6 +2354,90 @@ struct Engine {
     }
     /// The CPU half: the entries without a slot on the pool (ggml-cpu's arithmetic for the layer's formats), their
     /// rows uploaded and merged into the entries' rows.
+    // ---- STRATA_Q36_FETCH: missed experts over PCIe (see moe_hybrid_cpu)
+    uint8_t* fbuf = nullptr;          // the fetched experts' blobs (kFetchMax x the largest stride)
+    uint8_t* ftab_d = nullptr;        // group tables on the device / pinned on the host, two of each (by call parity)
+    uint8_t* ftab_h = nullptr;
+    size_t ftab_bytes = 0;
+    int fpar = 0;
+    cudaStream_t fst = nullptr;
+    cudaEvent_t ev_fcopy = nullptr, ev_fdone = nullptr, ev_ftab[2] = {nullptr, nullptr};
+    static constexpr int kFetchMax = 32;
+    void fetch_misses(const Layer& L, const Hy& H, int T, double frac, std::vector<char>& fetched) {
+        const auto& g = m->g;
+        const int Kp = (int) m->top_k, n_ent = T * Kp, ne = (int) g.n_expert;
+        std::vector<int> cnt((size_t) ne, 0);
+        for (int e = 0; e < n_ent; ++e)
+            if (H.slot_of[(size_t) h_ids[e]] < 0) ++cnt[(size_t) h_ids[e]];
+        std::vector<int> miss;
+        for (int x = 0; x < ne; ++x)
+            if (cnt[(size_t) x] > 0) miss.push_back(x);
+        int nf = (int) std::lround(frac * (double) miss.size());
+        nf = std::min(nf, kFetchMax);
+        if (nf <= 0) return;
+        std::stable_sort(miss.begin(), miss.end(), [&](int a, int b) { return cnt[(size_t) a] > cnt[(size_t) b]; });
+        miss.resize((size_t) nf);
+        std::sort(miss.begin(), miss.end());
+        if (!fbuf) {
+            size_t smax = 0;
+            for (const Layer& y : m->layers) smax = std::max(smax, y.stride);
+            if (m->has_mtp) smax = std::max(smax, m->mtp.stride);
+            const size_t cap = (size_t) tmax * Kp;
+            ftab_bytes = ((cap + 1) * 8 + (cap + 2) * 4 + 4 + 2 * cap * 4 + 255) & ~(size_t) 255;
+            if (cudaMalloc(&fbuf, smax * kFetchMax + kMmqTail) != cudaSuccess || cudaMalloc(&ftab_d, 2 * ftab_bytes) != cudaSuccess) {
+                (void) cudaGetLastError();
+                std::fprintf(stderr, "strata-q36: STRATA_Q36_FETCH: no VRAM for the fetch buffer, off\n");
+                setenv("STRATA_Q36_FETCH", "0", 1);
+                fbuf = nullptr;
+                return;
+            }
+            CK(cudaHostAlloc((void**) &ftab_h, 2 * ftab_bytes, cudaHostAllocDefault));
+            CK(cudaStreamCreateWithFlags(&fst, cudaStreamNonBlocking));
+            CK(cudaEventCreateWithFlags(&ev_fcopy, cudaEventDisableTiming));
+            CK(cudaEventCreateWithFlags(&ev_fdone, cudaEventDisableTiming));
+            for (auto& ev : ev_ftab) CK(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming));
+            CK(cudaEventRecord(ev_fdone, st));
+        }
+        // the blobs: after the previous call's kernel has read the buffer
+        CK(cudaStreamWaitEvent(fst, ev_fdone, 0));
+        for (int i = 0; i < nf; ++i)
+            CK(cudaMemcpyAsync(fbuf + (size_t) i * L.stride, L.hblobs + (size_t) miss[(size_t) i] * L.stride, L.L.bytes,
+                               cudaMemcpyHostToDevice, fst));
+        CK(cudaEventRecord(ev_fcopy, fst));
+        // the tables (this parity's pinned copy is free once its last upload ran)
+        const int b = fpar;
+        fpar ^= 1;
+        CK(cudaEventSynchronize(ev_ftab[b]));
+        const size_t cap = (size_t) tmax * Kp;
+        uint8_t* hb = ftab_h + (size_t) b * ftab_bytes;
+        uint8_t* db = ftab_d + (size_t) b * ftab_bytes;
+        auto* tp = (unsigned long long*) hb;
+        auto* ts = (int32_t*) (hb + (cap + 1) * 8);
+        auto* tn = ts + cap + 2;
+        auto* td = tn + 1;
+        auto* tt = td + cap;
+        int pos = 0;
+        for (int i = 0; i < nf; ++i) {
+            const int x = miss[(size_t) i];
+            tp[i] = (unsigned long long) (fbuf + (size_t) i * L.stride);
+            ts[i] = pos;
+            for (int e = 0; e < n_ent; ++e)
+                if (h_ids[e] == x) { td[pos] = e; tt[pos] = e / Kp; ++pos; }
+            fetched[(size_t) x] = 1;
+        }
+        ts[nf] = pos;
+        *tn = nf;
+        CK(cudaMemcpyAsync(db, hb, ftab_bytes, cudaMemcpyHostToDevice, st));
+        CK(cudaEventRecord(ev_ftab[b], st));
+        CK(cudaStreamWaitEvent(st, ev_fcopy, 0));
+        K::native_expert_grouped(L.L, (const unsigned long long*) db, (const int32_t*) (db + (cap + 1) * 8),
+                                 (const int32_t*) (db + (cap + 1) * 8) + cap + 2,
+                                 (const int32_t*) (db + (cap + 1) * 8) + cap + 3,
+                                 (const int32_t*) (db + (cap + 1) * 8) + cap + 3 + cap, nf, pos, xq, escr, eparts, st);
+        CK(cudaEventRecord(ev_fdone, st));
+        hy_fetch += nf;
+    }
+    int64_t hy_fetch = 0;
     void moe_hybrid_cpu(size_t li, int T) {
 #if defined(STRATA_Q36_CPU_POOL)
         namespace C = strata::kernels::cpu;
@@ -2360,6 +2449,12 @@ struct Engine {
         while (cudaEventQuery(ev_route) == cudaErrorNotReady) {
         }
         const auto t0 = Clock::now();
+        // STRATA_Q36_FETCH=F (opt-in, 0 < F <= 1): the share F of the missed experts (the ones with the most entries
+        // first) is copied over PCIe into a small VRAM buffer and run on the GPU's grouped kernel while the CPU pool
+        // runs the rest - PCIe and the CPU work at once instead of the CPU alone.  Off: as before.
+        std::vector<char> fetched((size_t) g.n_expert, 0);
+        static const double fetch_frac = [] { const char* v = std::getenv("STRATA_Q36_FETCH"); return v ? std::atof(v) : 0.0; }();
+        if (fetch_frac > 0.0) fetch_misses(L, H, T, fetch_frac, fetched);
         // the missed entries per expert (up to MAXT tokens per job)
         jobs.clear();
         std::vector<char> quantized((size_t) T, 0);
@@ -2374,7 +2469,7 @@ struct Engine {
             const int x = h_ids[e];
             if (!defer) H.score[(size_t) x] += 1.0;
             static const bool all_cpu = std::getenv("STRATA_Q36_ALL_CPU") != nullptr;   // debug: every entry on the pool
-            h_miss[e] = all_cpu || H.slot_of[(size_t) x] < 0;
+            h_miss[e] = (all_cpu || H.slot_of[(size_t) x] < 0) && !fetched[(size_t) x];
             if (!h_miss[e]) continue;
             ++n_miss;
             const int t = e / Kp;
@@ -3037,7 +3132,30 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     for (Layer* L : all)
         if (!mtp_only || L == &m.mtp) host += L->stride * (size_t) ne + kMmqTail;
     uint8_t* arena = nullptr;
-    bool pinned = cudaHostAlloc((void**) &arena, host, cudaHostAllocDefault) == cudaSuccess;
+    bool pinned = false;
+#if defined(__linux__)
+    // STRATA_Q36_HUGEPAGES=1 (opt-in; Linux with transparent huge pages in "madvise" or "always" mode): the arena in
+    // 2 MiB pages, then pinned.  The CPU pool reads each expert (MBs) in one sweep; in 4 KiB pages that is a TLB miss
+    // every 4 KiB.  Same bytes, same arithmetic: only where the memory lives changes.
+    if (const char* hp = std::getenv("STRATA_Q36_HUGEPAGES"); hp && hp[0] == '1') {
+        const size_t huge = (size_t) 2 << 20, len = (host + huge - 1) / huge * huge;
+        void* p = mmap(nullptr, len + huge, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p != MAP_FAILED) {
+            uint8_t* a = (uint8_t*) (((uintptr_t) p + huge - 1) & ~(uintptr_t) (huge - 1));
+            madvise(a, len, MADV_HUGEPAGE);
+            std::memset(a, 0, len);   // fault the pages in as huge pages before pinning
+            if (cudaHostRegister(a, len, cudaHostRegisterDefault) == cudaSuccess) {
+                arena = a;
+                pinned = true;
+                std::fprintf(stderr, "strata-q36: the host experts in huge pages (%.2f GiB)\n", (double) len / (1 << 30));
+            } else {
+                (void) cudaGetLastError();
+                munmap(p, len + huge);
+            }
+        }
+    }
+#endif
+    if (!pinned) pinned = cudaHostAlloc((void**) &arena, host, cudaHostAllocDefault) == cudaSuccess;
     if (!pinned) {
         (void) cudaGetLastError();
         arena = (uint8_t*) std::malloc(host);
@@ -3990,8 +4108,8 @@ int strata::qwen35::run(int argc, char** argv) {
             if (!E.m->hybrid) return;
             const long long n = E.hy_cpu + E.hy_gpu;
             std::fprintf(stderr, "strata-q36: hybrid experts: %lld of %lld batch entries on the GPU (%.1f%%), %lld on the "
-                         "CPU pool in %.0f ms, %lld slot replacements\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
-                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps);
+                         "CPU pool in %.0f ms, %lld slot replacements, %lld experts fetched over PCIe\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
+                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps, (long long) E.hy_fetch);
         }
     } report{E};
     E.reset();
