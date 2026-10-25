@@ -55,12 +55,16 @@ Tiers: VRAM slots -> pinned RAM (all 48.2 GiB of experts fit in 61 GB RAM, so th
 ## Head to head (same GGUF, same machine, 2026-10-25)
 | test | llama.cpp best tuned | Strata (defaults) | |
 |---|---|---|---|
-| pp512 | 181.5 (`--n-cpu-moe 31 -t 8 -ub 512`) | 153.4 (156.3 with `--hybrid-rows 256`) | **llama.cpp faster** |
+| pp512 | 181.5 (`--n-cpu-moe 31 -t 8 -ub 512`) | 213.4 / 226.6 (two runs) | Strata +18-25% |
 | pp2048 | 532.8 (`--n-cpu-moe 34 -ub 2048 -b 2048`) | 569.5 | Strata +7% |
 | pp4096 | 875.6 (`--n-cpu-moe 36 -ub 4096 -b 4096`) | 985.9 (`STRATA_Q36_CHUNK=4096`) | Strata +13% |
-| tg128 (bench) | 14.45 (`--n-cpu-moe 31 -t 16`) | 15.9 (after pp2048), 19.0 (after pp512) | Strata +10-31% |
+| tg128 (bench) | 14.45 (`--n-cpu-moe 31 -t 16`) | 15.9 (after pp2048), 19.4 (after pp512) | Strata +10-34% |
 | 256-token chat decode | 14.1 (llama-server); 9.97 with MTP | 18.1; 19.3 with `--mtp 1` (setup's default) | Strata +34% |
 Strata commands: `strata-q36 --model <shard1> --max-context 8192 --bench-pp N --bench-tg 128` (3rd of 3 runs);
 decode: `--tokens <code prompt> --n 256 [--mtp 1]`. llama.cpp: `llama-bench -m <shard1> -ngl 99 -fa 1 ...` as listed.
-Not won: short prompts (512 tokens). Strata keeps ~10 GiB of experts in VRAM (llama.cpp ~17 GiB in whole layers), so
-a short prompt streams more over PCIe 3.0. --n-cpu-moe 27-30 did not fit in VRAM for llama.cpp.
+Short prompts were first lost (pp512 153.4): every chunk streamed all non-resident experts over PCIe 3.0. Fix:
+STRATA_Q36_STREAM_CPU (Ornith default `auto` = 0.5 for chunks <= 1024 rows): half of the non-resident experts, the
+least used, are not copied; the CPU pool computes their entries while PCIe brings the rest. pp512 sweep: 0.2 183,
+0.35 213, 0.5 251, 0.65 218; at pp2048 0.35 gave 562 (off: 570), hence off above 1024 rows.
+Correctness of that path (1228-token prompt, 512-row chunks, 16 forced steps vs llama.cpp): KL 0.054 with it, 0.046
+without, top-1 94% / 100%. --n-cpu-moe 27-30 did not fit in VRAM for llama.cpp.

@@ -422,6 +422,13 @@ __global__ void k_group_hy(const int32_t* ids, int n_ent, int K_, int n_expert, 
     }
 }
 /// The CPU pool's expert rows into the entries' rows: parts[e] = cpu[e] where miss[e].  grid (n_ent), block 256.
+/// k_merge_cpu for the MMQ layout: entry e's row is parts[prow[e]].
+__global__ void k_merge_cpu_rows(float* parts, const float* cpu, const int32_t* miss, const int32_t* prow, int n) {
+    const int e = blockIdx.x;
+    if (!miss[e]) return;
+    const size_t r = (size_t) prow[e];
+    for (int i = threadIdx.x; i < n; i += blockDim.x) parts[r * n + i] = cpu[(size_t) e * n + i];
+}
 __global__ void k_merge_cpu(float* parts, const float* cpu, const int32_t* miss, int n) {
     const int e = blockIdx.x;
     if (!miss[e]) return;
@@ -2132,6 +2139,7 @@ struct Engine {
             dn.expert_bytes = L.stride; dn.n = ne; dn.xq = mq_hq; dn.bounds = rbounds; dn.ids = ident;
             dn.total_rows = n_ent; dn.max_rows = maxr; dn.dst = eparts; dn.ld_dst = N;
             mctx->run(dn, st);
+            if (lhy(li)) moe_stream_cpu(li, T);
             if (lhy(li)) stream_done();
             prow = rinv;
         } else {
@@ -2193,6 +2201,7 @@ struct Engine {
             std::vector<int> seq;
             for (size_t l = 0; l < m->layers.size(); ++l)
                 if (lhy(l)) seq.push_back((int) l);
+            stream_T = T;
             stream_begin(seq);
         }
         K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, tok, T, N, x, st);
@@ -2304,6 +2313,20 @@ struct Engine {
         // STRATA_Q36_STREAM_RUNS=1: the runs copy at any slot count (the resident experts device to device, only the
         // rest over PCIe); measured faster on a PCIe 3.0 RTX 3090 Ti with 53 of 256 resident (Ornith-1.5 IQ3_XS)
         static const bool runs = [] { const char* v = std::getenv("STRATA_Q36_STREAM_RUNS"); return v && v[0] == '1'; }();
+        // STRATA_Q36_STREAM_CPU=F (with the runs copy): the share F of the non-resident experts, the least used, is not
+        // copied: the CPU pool computes their entries while PCIe brings the rest (moe_stream_cpu)
+        // "auto": 0.5 for chunks of <= 1024 rows, else off (measured, Ornith IQ3_XS on a PCIe 3.0 3090 Ti: pp512 best at 0.5, pp2048 at ~0.15)
+        static const char* scv = std::getenv("STRATA_Q36_STREAM_CPU");
+        const double scpu = !scv ? 0.0 : std::strcmp(scv, "auto") == 0 ? (stream_T <= 1024 ? 0.5 : 0.0) : std::atof(scv);
+        stream_cpu[b].assign((size_t) ne, 0);
+        if (runs && scpu > 0.0 && m->hybrid) {
+            std::vector<int> nr;
+            for (int x = 0; x < ne; ++x)
+                if (H.slot_of[(size_t) x] < 0) nr.push_back(x);
+            std::stable_sort(nr.begin(), nr.end(), [&](int a2, int b2) { return H.score[(size_t) a2] < H.score[(size_t) b2]; });
+            const size_t k = (size_t) std::lround(scpu * (double) nr.size());
+            for (size_t i = 0; i < k && i < nr.size(); ++i) stream_cpu[b][(size_t) nr[i]] = 1;
+        }
         if (all || (!runs && 2 * L.n_slots < ne)) {
             CK(cudaMemcpyAsync(stage[b], L.hblobs, L.stride * (size_t) ne, cudaMemcpyHostToDevice, cst));
         } else {
@@ -2312,8 +2335,12 @@ struct Engine {
                 int y = x + 1;
                 if (dev)   // consecutive slots holding consecutive experts
                     while (y < ne && H.slot_of[(size_t) y] == H.slot_of[(size_t) y - 1] + 1) ++y;
-                else
-                    while (y < ne && H.slot_of[(size_t) y] < 0) ++y;
+                else if (stream_cpu[b][(size_t) x]) {   // the CPU's: not copied
+                    while (y < ne && H.slot_of[(size_t) y] < 0 && stream_cpu[b][(size_t) y]) ++y;
+                    x = y;
+                    continue;
+                } else
+                    while (y < ne && H.slot_of[(size_t) y] < 0 && !stream_cpu[b][(size_t) y]) ++y;
                 const size_t n = (size_t) (y - x) * L.stride;
                 if (dev)
                     CK(cudaMemcpyAsync(stage[b] + (size_t) x * L.stride, L.blobs + (size_t) H.slot_of[(size_t) x] * L.stride,
@@ -2379,6 +2406,59 @@ struct Engine {
     }
     /// The CPU half: the entries without a slot on the pool (ggml-cpu's arithmetic for the layer's formats), their
     /// rows uploaded and merged into the entries' rows.
+    /// A streamed prompt layer's CPU share (STRATA_Q36_STREAM_CPU): the entries of the experts the copy skipped, on the
+    /// pool while the GPU runs MMQ on the rest, then written over those entries' rows (whose MMQ output read stale bytes).
+    void moe_stream_cpu(size_t li, int T) {
+#if defined(STRATA_Q36_CPU_POOL)
+        namespace C = strata::kernels::cpu;
+        const std::vector<char>& cs = stream_cpu[stream_pos % 2];
+        if (cs.empty() || std::find(cs.begin(), cs.end(), 1) == cs.end()) return;
+        const auto& g = m->g;
+        const int N = (int) g.n_embd, Kp = (int) m->top_k, n_ent = T * Kp;
+        const Layer& L = layer_at((int) li);
+        Hy& H = hy[li];
+        CK(cudaMemcpyAsync(h_ids, ids, (size_t) n_ent * 4, cudaMemcpyDeviceToHost, st));
+        CK(cudaMemcpyAsync(h_h, h, (size_t) T * N * 4, cudaMemcpyDeviceToHost, st));
+        CK(cudaEventRecord(ev_route, st));
+        CK(cudaEventSynchronize(ev_route));
+        const auto t0 = Clock::now();
+        jobs.clear();
+        std::vector<char> quantized((size_t) T, 0);
+        std::map<int, size_t> open;
+        int n_miss = 0;
+        for (int e = 0; e < n_ent; ++e) {
+            const int x = h_ids[e];
+            h_miss[e] = cs[(size_t) x];
+            if (!h_miss[e]) continue;
+            ++n_miss;
+            const int t = e / Kp;
+            if (!quantized[(size_t) t]) {
+                C::native_quant_act(H.fmt, h_h + (size_t) t * N, acts + (size_t) t * C::kNativeActBytes);
+                quantized[(size_t) t] = 1;
+            }
+            auto it = open.find(x);
+            if (it == open.end() || jobs[it->second].nt == C::MAXT) {
+                C::ExpertJobMulti j;
+                j.blob = L.hblobs + (size_t) x * L.stride;
+                jobs.push_back(j);
+                it = open.insert_or_assign(x, jobs.size() - 1).first;
+            }
+            C::ExpertJobMulti& j = jobs[it->second];
+            j.nact[j.nt] = acts + (size_t) t * C::kNativeActBytes;
+            j.out[j.nt] = cpu_out + (size_t) e * N;
+            ++j.nt;
+        }
+        if (n_miss == 0) return;
+        pool->run_split_multi_native(H.fmt, jobs.data(), (int) jobs.size());
+        hy_cpu += n_miss;
+        hy_cpu_ms += ms_since(t0);
+        CK(cudaMemcpyAsync(ecpu, cpu_out, (size_t) n_ent * N * 4, cudaMemcpyHostToDevice, st));
+        CK(cudaMemcpyAsync(d_miss, h_miss, (size_t) n_ent * 4, cudaMemcpyHostToDevice, st));
+        k_merge_cpu_rows<<<n_ent, kThreads, 0, st>>>(eparts, ecpu, d_miss, rinv, N);
+#else
+        (void) li; (void) T;
+#endif
+    }
     // ---- STRATA_Q36_FETCH: missed experts over PCIe (see moe_hybrid_cpu)
     uint8_t* fbuf = nullptr;          // the fetched experts' blobs (kFetchMax x the largest stride)
     uint8_t* ftab_d = nullptr;        // group tables on the device / pinned on the host, two of each (by call parity)
@@ -2463,6 +2543,8 @@ struct Engine {
         hy_fetch += nf;
     }
     int64_t hy_fetch = 0;
+    std::vector<char> stream_cpu[2];
+    int stream_T = 0;
     bool fetch_off = false;
     std::vector<cudaEvent_t> sp_ev;
     void moe_hybrid_cpu(size_t li, int T) {
@@ -4071,9 +4153,10 @@ int strata::qwen35::run(int argc, char** argv) {
         if (strata::core::geometry_from_gguf(probe.meta(), pg, pk, perr) && pg.n_embd == 3072 && pg.n_ff == 1024) {
             env_default("STRATA_Q8_PACKED", "0");         // the VRAM for 9 more expert slots per layer instead
             env_default("STRATA_Q36_STREAM_RUNS", "1");   // prompt chunks copy only the non-resident experts
-            env_default("STRATA_Q36_FETCH", "0.5");       // half the missed experts over PCIe beside the CPU pool
+            env_default("STRATA_Q36_FETCH", "0.5");
+            env_default("STRATA_Q36_STREAM_CPU", "auto");   // short prompt chunks: part of the missing experts on the CPU       // half the missed experts over PCIe beside the CPU pool
             std::fprintf(stderr, "strata-q36: Ornith-1.5 geometry: its measured defaults (STRATA_Q8_PACKED=0, "
-                         "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5; set any to override)\n");
+                         "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5, STRATA_Q36_STREAM_CPU=auto; set any to override)\n");
         }
     }
 #if !defined(_WIN32)
