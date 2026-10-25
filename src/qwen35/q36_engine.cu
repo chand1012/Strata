@@ -2412,7 +2412,7 @@ struct Engine {
             if (cudaMalloc(&fbuf, smax * kFetchMax + kMmqTail) != cudaSuccess || cudaMalloc(&ftab_d, 2 * ftab_bytes) != cudaSuccess) {
                 (void) cudaGetLastError();
                 std::fprintf(stderr, "strata-q36: STRATA_Q36_FETCH: no VRAM for the fetch buffer, off\n");
-                    fetch_off = true;
+                fetch_off = true;
                 fbuf = nullptr;
                 return;
             }

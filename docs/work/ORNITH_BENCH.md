@@ -31,3 +31,23 @@ per step over the whole vocabulary. Reference: `tools/qwen35/q36_llama_dump --cp
 The bug found: the CPU pool's native split buffers were `float ff[MAXT][640]` (Flash-Next's width); Ornith's
 expert width is 1024, so an expert serving several tokens wrote one token's row over the next. Fixed with
 `kNativeMaxFF = 1024` (wider experts are refused, not overrun).
+
+## Strata optimizations, one at a time (strata-q36 --bench-pp N --bench-tg 128, 3rd of 3 runs; decode = 256 greedy
+tokens on the code prompt)
+| step | pp2048 | pp4096 | tg128 | 256-token decode |
+|---|---|---|---|---|
+| first run (no MMQ: the Q4_0 MTP experts turned it off) | 118 | | 13.5 | |
+| Q4_0 MTP experts re-encoded -> MMQ + streamed prompt chunks | 523.5 | | 12.2 | 12.0 |
+| STRATA_Q8_PACKED=0 (VRAM for 53 instead of 44 slots/layer) | 523.1 | | 11.2 | 14.9 |
+| + STRATA_Q36_CHUNK=4096 | | 1047 | | |
+| + STRATA_Q36_FETCH=0.5 (half the missed experts over PCIe beside the CPU pool) | 526.2 | | | 18.1 |
+| + STRATA_Q36_STREAM_RUNS=1 (prompt stream copies only non-resident experts) | 573.2 | | | |
+| all three (now the Ornith defaults) | 568.1 | 985.8 | 15.8 | |
+| defaults + --mtp 1 | | | | 19.3 (82% accepted) |
+| Fetch sweep (decode): 0.3 16.3, 0.4 16.1, 0.5 18.1, 0.6 16.1, 0.7 15.0, 0.8 13.2 | | | | |
+
+Not helping here: --cpu-threads 16 (7-10 tok/s), 6 or 7 threads (same as 8), STRATA_IQ3S_MT1, huge pages (13.2-13.3,
+same as without), MTP 2/3 drafts (11.1 / 9.4).
+Measured limits: PCIe 3.0 x16 12.9 GB/s pinned H2D; the CPU pool's IQ3_S expert rows 20-24 GB/s on 8 threads
+(kq_cpu_bench --h 3072 --ff 1024). The prompt stream waits 2.84 s of a 3.87 s pp2048 for copies (STRATA_Q36_STREAM_PROF).
+Tiers: VRAM slots -> pinned RAM (all 48.2 GiB of experts fit in 61 GB RAM, so there is no SSD tier for this file).
