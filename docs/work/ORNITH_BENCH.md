@@ -51,3 +51,16 @@ same as without), MTP 2/3 drafts (11.1 / 9.4).
 Measured limits: PCIe 3.0 x16 12.9 GB/s pinned H2D; the CPU pool's IQ3_S expert rows 20-24 GB/s on 8 threads
 (kq_cpu_bench --h 3072 --ff 1024). The prompt stream waits 2.84 s of a 3.87 s pp2048 for copies (STRATA_Q36_STREAM_PROF).
 Tiers: VRAM slots -> pinned RAM (all 48.2 GiB of experts fit in 61 GB RAM, so there is no SSD tier for this file).
+
+## Head to head (same GGUF, same machine, 2026-10-25)
+| test | llama.cpp best tuned | Strata (defaults) | |
+|---|---|---|---|
+| pp512 | 181.5 (`--n-cpu-moe 31 -t 8 -ub 512`) | 153.4 (156.3 with `--hybrid-rows 256`) | **llama.cpp faster** |
+| pp2048 | 532.8 (`--n-cpu-moe 34 -ub 2048 -b 2048`) | 569.5 | Strata +7% |
+| pp4096 | 875.6 (`--n-cpu-moe 36 -ub 4096 -b 4096`) | 985.9 (`STRATA_Q36_CHUNK=4096`) | Strata +13% |
+| tg128 (bench) | 14.45 (`--n-cpu-moe 31 -t 16`) | 15.9 (after pp2048), 19.0 (after pp512) | Strata +10-31% |
+| 256-token chat decode | 14.1 (llama-server); 9.97 with MTP | 18.1; 19.3 with `--mtp 1` (setup's default) | Strata +34% |
+Strata commands: `strata-q36 --model <shard1> --max-context 8192 --bench-pp N --bench-tg 128` (3rd of 3 runs);
+decode: `--tokens <code prompt> --n 256 [--mtp 1]`. llama.cpp: `llama-bench -m <shard1> -ngl 99 -fa 1 ...` as listed.
+Not won: short prompts (512 tokens). Strata keeps ~10 GiB of experts in VRAM (llama.cpp ~17 GiB in whole layers), so
+a short prompt streams more over PCIe 3.0. --n-cpu-moe 27-30 did not fit in VRAM for llama.cpp.
