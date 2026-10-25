@@ -17,3 +17,17 @@ llama-server, greedy, 256 tokens: --n-cpu-moe 31 -t 8: 14.1 / 13.7 tok/s. With M
 Best llama.cpp: decode 14.45 tok/s, prefill 532.8 (pp2048) / 875.6 (pp4096).
 
 Command: `llama-bench -m <shard1> -ngl 99 -fa 1 -t 8 -p 2048 -n 0 -b 2048 -ub 2048 --n-cpu-moe 34`
+
+## Correctness vs llama.cpp (teacher-forced, full-vocabulary logits)
+3 prompts (fr / code / story), 64 steps each: llama.cpp's greedy continuation fed to both engines, KL(llama || engine)
+per step over the whole vocabulary. Reference: `tools/qwen35/q36_llama_dump --cpu-moe 1` (llama.cpp f3269ef).
+| engine vs reference | fr | code | story | mean | top-1 agree |
+|---|---|---|---|---|---|
+| llama.cpp `--ngl 14` (noise floor) | 0.037 | 0.009 | 0.050 | 0.032 | 94.8% |
+| Strata (default, MMQ prompt) | 0.035 | 0.016 | 0.022 | 0.024 | 95.3% |
+| Strata (STRATA_Q36_NO_MMQ=1) | 0.034 | 0.022 | 0.019 | 0.025 | 94.8% |
+| Strata before the pool fix | 0.124 | 0.134 | 0.342 | 0.200 | 87.5% |
+
+The bug found: the CPU pool's native split buffers were `float ff[MAXT][640]` (Flash-Next's width); Ornith's
+expert width is 1024, so an expert serving several tokens wrote one token's row over the next. Fixed with
+`kNativeMaxFF = 1024` (wider experts are refused, not overrun).

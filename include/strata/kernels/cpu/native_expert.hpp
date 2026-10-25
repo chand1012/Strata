@@ -18,6 +18,9 @@ inline constexpr size_t kNativeActBytes = 4096;
 /// Bytes of the largest quantized down activation (640 values as Q8_0: 20 x 34, or Q8_K 3 x 292; Ornith-1.5's
 /// 1024 as Q8_K: 4 x 292 = 1168).
 inline constexpr size_t kNativeHBytes = 2048;
+/// The widest expert intermediate (n_ff) the pool's native split buffers hold (Flash-Next 640, Qwen3.6 512,
+/// Ornith-1.5 1024).  Was the Q2 pack's FF (640): a wider expert overran one token's row into the next one's.
+inline constexpr int kNativeMaxFF = 1024;
 
 /// One layer's native expert geometry.
 struct NativeFmt {

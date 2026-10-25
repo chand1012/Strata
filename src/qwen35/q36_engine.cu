@@ -1117,6 +1117,15 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
             if (!recode(td, sd, kQ5_K, down_src)) { err = L(l, "ffn_down_exps cannot be re-encoded"); return false; }
             d_type = kQ5_K;
         }
+        // STRATA_Q36_RECODE_DOWN=T / STRATA_Q36_RECODE_GU=T (debug): every expert down / gate+up re-encoded as ggml type T
+        if (const char* e = std::getenv("STRATA_Q36_RECODE_DOWN"); e && down_src == nullptr && l < 4) {
+            if (!recode(td, sd, std::atoi(e), down_src)) { err = "recode down failed"; return false; }
+            d_type = std::atoi(e);
+        }
+        if (const char* e = std::getenv("STRATA_Q36_RECODE_GU"); e && up_src == nullptr && l < 4) {
+            if (!recode(tu, su, std::atoi(e), up_src)) { err = "recode up failed"; return false; }
+            gu_type = std::atoi(e);
+        }
         if ((int) tg->type != gu_type && !recode(tg, sg, gu_type, gate_src)) {
             err = L(l, "ffn_gate_exps / ffn_up_exps differ in type, and the gate cannot be re-encoded");
             return false;
@@ -2049,6 +2058,16 @@ struct Engine {
             mm(L.wo, att, y, T);
         }
         add_rms_post(L, T);
+        {   // STRATA_Q36_DUMP_ATTN=F (debug, with --no-graph): the residual after the mixer (llama.cpp's attn_residual-N)
+            static FILE* dump = [] { const char* f = std::getenv("STRATA_Q36_DUMP_ATTN"); return f ? std::fopen(f, "wb") : nullptr; }();
+            if (dump && !graph_mode) {
+                std::vector<float> hx((size_t) T * N);
+                CK(cudaMemcpyAsync(hx.data(), x, hx.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaStreamSynchronize(st));
+                std::fwrite(hx.data(), 4, hx.size(), dump);
+                std::fflush(dump);
+            }
+        }
         // routed experts (one token: the router and the shared expert's gate in one product, the gate its last row)
         const bool one = T == 1;
         // a decode batch of up to 8 rows takes the router and the shared expert's gate in one product too (rows of 257) when the fused
@@ -2063,6 +2082,19 @@ struct Engine {
         if (!(!mmq_rows && route_group(L, hy_rows ? hy[li].slot_of_d : nullptr, T, ext ? (int) g.n_expert + 1 : (int) g.n_expert)))
             K::native_router_topk(logits_r, ids, ewts, (int) g.n_expert, Kp, T, st);
         const int64_t n_ent = (int64_t) T * Kp;
+        {   // STRATA_Q36_DUMP_ROUTE=F (debug, --no-graph): per layer call, T*Kp expert ids (int32) then T*Kp weights (f32)
+            static FILE* dump = [] { const char* f = std::getenv("STRATA_Q36_DUMP_ROUTE"); return f ? std::fopen(f, "wb") : nullptr; }();
+            if (dump && !graph_mode) {
+                std::vector<int32_t> hi((size_t) n_ent);
+                std::vector<float> hw((size_t) n_ent);
+                CK(cudaMemcpyAsync(hi.data(), ids, hi.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaMemcpyAsync(hw.data(), ewts, hw.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaStreamSynchronize(st));
+                std::fwrite(hi.data(), 4, hi.size(), dump);
+                std::fwrite(hw.data(), 4, hw.size(), dump);
+                std::fflush(dump);
+            }
+        }
         const int32_t* prow = nullptr;
         if (hy_rows) {
             moe_hybrid_gpu(L, li, T);
@@ -2119,7 +2151,29 @@ struct Engine {
             mm(L.sh_down, shh, sy, T);
         }
         if (!ext) f32mm(L.sh_gate_inp, h, sgate, N, 1, T);
+        {   // STRATA_Q36_DUMP_SH=F (debug, --no-graph): the shared expert's output before its gate (llama.cpp's ffn_shexp-N)
+            static FILE* dump = [] { const char* f = std::getenv("STRATA_Q36_DUMP_SH"); return f ? std::fopen(f, "wb") : nullptr; }();
+            if (dump && !graph_mode) {
+                std::vector<float> hx((size_t) T * N);
+                CK(cudaMemcpyAsync(hx.data(), sy, hx.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaStreamSynchronize(st));
+                std::fwrite(hx.data(), 4, hx.size(), dump);
+                std::fflush(dump);
+            }
+        }
         if (hy_rows) moe_hybrid_cpu(li, T);   // the CPU pool's experts (while the GPU runs the rest), merged
+        {   // STRATA_Q36_DUMP_PARTS=F (debug, --no-graph): h [T][N], then eparts [T*Kp][N] (merged), per layer call
+            static FILE* dump = [] { const char* f = std::getenv("STRATA_Q36_DUMP_PARTS"); return f ? std::fopen(f, "wb") : nullptr; }();
+            if (dump && !graph_mode) {
+                std::vector<float> hx((size_t) T * N), ep((size_t) T * Kp * N);
+                CK(cudaMemcpyAsync(hx.data(), h, hx.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaMemcpyAsync(ep.data(), eparts, ep.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaStreamSynchronize(st));
+                std::fwrite(hx.data(), 4, hx.size(), dump);
+                std::fwrite(ep.data(), 4, ep.size(), dump);
+                std::fflush(dump);
+            }
+        }
         // the combine, the shared expert's gate, the residual add and the next norm in one launch
         moe_end(T, prow, sy, ext ? logits_r + g.n_expert : sgate, wn, hout, ext ? (int) g.n_expert + 1 : 1);
     }
@@ -2143,6 +2197,16 @@ struct Engine {
             const bool last = l + 1 == m->layers.size();
             layer(m->layers[l], l, T, p0, pos0, graph_mode, verify, last ? m->out_norm : m->layers[l + 1].attn_norm,
                   last ? hmain : h);
+            // STRATA_Q36_DUMP_LAYERS=F (debug, with --no-graph): every layer's residual x after the layer, appended to F
+            // as [layer][T][n_embd] f32 per forward call (the parity check against llama.cpp's l_out-N)
+            static FILE* dump = [] { const char* f = std::getenv("STRATA_Q36_DUMP_LAYERS"); return f ? std::fopen(f, "wb") : nullptr; }();
+            if (dump && !graph_mode) {
+                std::vector<float> hx((size_t) T * N);
+                CK(cudaMemcpyAsync(hx.data(), x, hx.size() * 4, cudaMemcpyDeviceToHost, st));
+                CK(cudaStreamSynchronize(st));
+                std::fwrite(hx.data(), 4, hx.size(), dump);
+                std::fflush(dump);
+            }
         }
         if (heads > 0) head_rows(hmain + (size_t) (T - heads) * N, heads, logits, pick);
     }
@@ -2309,7 +2373,8 @@ struct Engine {
         for (int e = 0; e < n_ent; ++e) {
             const int x = h_ids[e];
             if (!defer) H.score[(size_t) x] += 1.0;
-            h_miss[e] = H.slot_of[(size_t) x] < 0;
+            static const bool all_cpu = std::getenv("STRATA_Q36_ALL_CPU") != nullptr;   // debug: every entry on the pool
+            h_miss[e] = all_cpu || H.slot_of[(size_t) x] < 0;
             if (!h_miss[e]) continue;
             ++n_miss;
             const int t = e / Kp;

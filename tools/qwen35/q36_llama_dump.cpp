@@ -6,13 +6,14 @@
 // Built against a llama.cpp checkout (not part of Strata's build):
 //   g++ -O2 -std=c++17 q36_llama_dump.cpp -I<llama>/include -I<llama>/ggml/include -L<llama>/build/bin -lllama -lggml
 //       -lggml-base -Wl,-rpath,<llama>/build/bin -o q36_llama_dump
-// Usage: q36_llama_dump --model GGUF (--prompt TEXT | --tokens ID,ID,...) [--n 64] [--ngl 99] [--dump-layers F]
+// Usage: q36_llama_dump --model GGUF (--prompt TEXT | --tokens ID,ID,...) [--n 64] [--ngl 99] [--cpu-moe 1] [--dump-layers F]
 //                       [--dump-logits F] [--force ID,ID,...] [--dump-full-logits F]
 //   --force feeds that continuation instead of the greedy ids (teacher forcing); --dump-full-logits writes every
 //   step's logits (f32, [step][vocab]).
 //   --prompt is tokenized with special tokens parsed and no BOS added (Qwen adds none).
 #include "llama.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -30,9 +31,11 @@ struct Capture {
 bool on_tensor(struct ggml_tensor* t, bool ask, void* user) {
     auto* c = (Capture*) user;
     const char* name = ggml_get_name(t);
-    if (std::strncmp(name, "l_out-", 6) != 0) return ask ? false : true;
+    // Q36_DUMP_NAME: another per-layer tensor than l_out (e.g. attn_residual, the residual after the mixer)
+    static const std::string pre = std::string(std::getenv("Q36_DUMP_NAME") ? std::getenv("Q36_DUMP_NAME") : "l_out") + "-";
+    if (std::strncmp(name, pre.c_str(), pre.size()) != 0) return ask ? false : true;
     if (ask) return true;
-    const int il = std::atoi(name + 6);
+    const int il = std::atoi(name + pre.size());
     if (t->type != GGML_TYPE_F32 || t->ne[0] != c->n_embd) return true;
     std::vector<float>& v = c->layers[il];
     v.resize((size_t) ggml_nelements(t));
@@ -56,6 +59,7 @@ std::vector<int> parse_ids(const std::string& s) {
 int main(int argc, char** argv) {
     std::string model, prompt, tokens, dump_layers, dump_logits, force, dump_full;
     int n_gen = 64, ngl = 99;
+    bool cpu_moe = false;
     for (int i = 1; i + 1 < argc; i += 2) {
         const std::string a = argv[i], v = argv[i + 1];
         if (a == "--model") model = v;
@@ -63,6 +67,7 @@ int main(int argc, char** argv) {
         else if (a == "--tokens") tokens = v;
         else if (a == "--n") n_gen = std::atoi(v.c_str());
         else if (a == "--ngl") ngl = std::atoi(v.c_str());
+        else if (a == "--cpu-moe") cpu_moe = std::atoi(v.c_str()) != 0;   // routed experts in host memory (a model larger than VRAM)
         else if (a == "--dump-layers") dump_layers = v;
         else if (a == "--dump-logits") dump_logits = v;
         else if (a == "--force") force = v;
@@ -75,6 +80,11 @@ int main(int argc, char** argv) {
     llama_backend_init();
     llama_model_params mp = llama_model_default_params();
     mp.n_gpu_layers = ngl;
+    static llama_model_tensor_buft_override ov[2] = {{"\\.ffn_(up|down|gate)_exps", nullptr}, {nullptr, nullptr}};
+    if (cpu_moe) {
+        ov[0].buft = ggml_backend_cpu_buffer_type();
+        mp.tensor_buft_overrides = ov;
+    }
     llama_model* mdl = llama_model_load_from_file(model.c_str(), mp);
     if (!mdl) { std::fprintf(stderr, "cannot load %s\n", model.c_str()); return 1; }
     const llama_vocab* vocab = llama_model_get_vocab(mdl);

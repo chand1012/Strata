@@ -108,6 +108,10 @@ bool native_fmt(int gu_type, int d_type, int64_t n_embd, int64_t n_ff, NativeFmt
     }
     f.act_bytes = ggml_row_size(vdt_g, n_embd);
     f.h_bytes = ggml_row_size(vdt_d, n_ff);
+    if (n_ff > kNativeMaxFF) {
+        err = "native experts: expert width larger than the pool's buffers";
+        return false;
+    }
     if (f.act_bytes > kNativeActBytes || f.h_bytes > kNativeHBytes) {
         err = "native experts: activation larger than the pool's buffers";
         return false;
