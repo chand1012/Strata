@@ -68,3 +68,11 @@ least used, are not copied; the CPU pool computes their entries while PCIe bring
 0.35 213, 0.5 251, 0.65 218; at pp2048 0.35 gave 562 (off: 570), hence off above 1024 rows.
 Correctness of that path (1228-token prompt, 512-row chunks, 16 forced steps vs llama.cpp): KL 0.054 with it, 0.046
 without, top-1 94% / 100%. --n-cpu-moe 27-30 did not fit in VRAM for llama.cpp.
+
+## Speed round 2 (2026-10-26)
+Baseline = branch at d91b6ac0 (Ornith defaults). Commands: `strata-q36 --model <shard1> --max-context 8192
+--bench-pp N --bench-tg 128` (3rd of 3 runs; pp4096 with the default prompt chunk) and the 256-token greedy decode on
+the code prompt (`--tokens <ids> --n 256 [--mtp 1]`). Script: ~/work/fullbench.sh.
+| config | pp512 | tg128 (after pp512) | pp2048 | tg128 (after pp2048) | pp4096 | chat 256 | chat 256 --mtp 1 |
+|---|---|---|---|---|---|---|---|
+| baseline | 226.3 | 19.4 | 569.3 | 15.8 | 573.8 | 17.3 | 19.4 (82%) |
