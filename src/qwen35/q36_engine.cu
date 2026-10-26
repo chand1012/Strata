@@ -1194,14 +1194,18 @@ void expert_blob(const Layer& L, int64_t e, uint8_t* dst) {
 }
 
 // ------------------------------------------------------------------------------------------------ the engine
-float* dalloc(size_t n) {
+// STRATA_Q36_MEMLOG=1 (debug): the engine buffers' bytes per allocating source line, printed after start-up
+std::map<int, size_t>& memlog() { static std::map<int, size_t> m; return m; }
+float* dalloc(size_t n, int line = __builtin_LINE()) {
     float* p = nullptr;
+    memlog()[line] += n * 4;
     CK(cudaMalloc(&p, n * 4));
     CK(cudaMemset(p, 0, n * 4));
     return p;
 }
-template <class T> T* dalloc_t(size_t n) {
+template <class T> T* dalloc_t(size_t n, int line = __builtin_LINE()) {
     T* p = nullptr;
+    memlog()[line] += n * sizeof(T);
     CK(cudaMalloc(&p, n * sizeof(T)));
     CK(cudaMemset(p, 0, n * sizeof(T)));
     return p;
@@ -1332,6 +1336,7 @@ struct Engine {
     uint8_t* acts = nullptr;   // per token: its quantized activation (kNativeActBytes)
     cudaEvent_t ev_route = nullptr;
     uint8_t* stage[2] = {};
+    size_t stage_cap = 0;   // STRATA_Q36_STAGE_SPLIT: the staging buffers' expert bytes (0: the largest layer)
     cudaStream_t cst = nullptr;
     cudaEvent_t ev_copy[2] = {}, ev_used[2] = {};
     std::vector<int> stream_seq;   // the state indices a streamed forward visits, in order
@@ -2128,18 +2133,25 @@ struct Engine {
             const int64_t maxr = hpin[10];
             const uint8_t* wbase = lhy(li) ? stream_take((int) li) : L.blobs;
             MMQ::quantize(h, ent_tok, mq_x, L.L.gu_type, N, N, n_ent, st);
-            MMQ::Product gu;
-            gu.w = wbase; gu.type = L.L.gu_type; gu.w_rows = 2 * FF; gu.w_cols = N; gu.expert_bytes = L.stride;
-            gu.n = ne; gu.xq = mq_x; gu.bounds = rbounds; gu.ids = ident; gu.total_rows = n_ent; gu.max_rows = maxr;
-            gu.dst = mq_gu; gu.ld_dst = 2 * FF;
-            mctx->run(gu, st);
-            MMQ::swiglu(mq_gu, mq_h, n_ent, FF, false, st);
-            MMQ::quantize(mq_h, nullptr, mq_hq, L.L.d_type, FF, FF, n_ent, st);
-            MMQ::Product dn;
-            dn.w = wbase + L.L.down_off; dn.type = L.L.d_type; dn.w_rows = N; dn.w_cols = FF;
-            dn.expert_bytes = L.stride; dn.n = ne; dn.xq = mq_hq; dn.bounds = rbounds; dn.ids = ident;
-            dn.total_rows = n_ent; dn.max_rows = maxr; dn.dst = eparts; dn.ld_dst = N;
-            mctx->run(dn, st);
+            // a layer larger than the staging buffers runs in parts of experts [p0, p1): the same products per expert
+            // (bounds are absolute rows), the next part copied into the buffer between them
+            const int pe = lhy(li) ? stream_part(L) : ne;
+            for (int p0 = 0; p0 < ne; p0 += pe) {
+                const int p1 = std::min(ne, p0 + pe);
+                if (p0 > 0) stream_next_part((int) li, p0, p1);
+                MMQ::Product gu;
+                gu.w = wbase; gu.type = L.L.gu_type; gu.w_rows = 2 * FF; gu.w_cols = N; gu.expert_bytes = L.stride;
+                gu.n = p1 - p0; gu.xq = mq_x; gu.bounds = rbounds + p0; gu.ids = ident; gu.total_rows = n_ent; gu.max_rows = maxr;
+                gu.dst = mq_gu; gu.ld_dst = 2 * FF;
+                mctx->run(gu, st);
+                MMQ::swiglu(mq_gu, mq_h, n_ent, FF, false, st);
+                MMQ::quantize(mq_h, nullptr, mq_hq, L.L.d_type, FF, FF, n_ent, st);
+                MMQ::Product dn;
+                dn.w = wbase + L.L.down_off; dn.type = L.L.d_type; dn.w_rows = N; dn.w_cols = FF;
+                dn.expert_bytes = L.stride; dn.n = p1 - p0; dn.xq = mq_hq; dn.bounds = rbounds + p0; dn.ids = ident;
+                dn.total_rows = n_ent; dn.max_rows = maxr; dn.dst = eparts; dn.ld_dst = N;
+                mctx->run(dn, st);
+            }
             if (lhy(li)) moe_stream_cpu(li, T);
             if (lhy(li)) stream_done();
             prow = rinv;
@@ -2328,10 +2340,23 @@ struct Engine {
             const size_t k = (size_t) std::lround(scpu * (double) nr.size());
             for (size_t i = 0; i < k && i < nr.size(); ++i) stream_cpu[b][(size_t) nr[i]] = 1;
         }
-        if (all || (!runs && 2 * L.n_slots < ne)) {
-            CK(cudaMemcpyAsync(stage[b], L.hblobs, L.stride * (size_t) ne, cudaMemcpyHostToDevice, cst));
+        stream_copy(b, L, H, 0, stream_part(L), all || (!runs && 2 * L.n_slots < ne));
+        CK(cudaEventRecord(ev_copy[b], cst));
+    }
+    /// Experts per part of a streamed layer: all of them unless the layer is larger than the staging buffers
+    /// (STRATA_Q36_STAGE_SPLIT: buffers sized for the common layer, a larger one streamed in parts).
+    int stream_part(const Layer& L) const {
+        const int ne = (int) m->g.n_expert;
+        if (stage_cap == 0 || L.stride * (size_t) ne <= stage_cap) return ne;
+        return std::max(1, (int) (stage_cap / L.stride));
+    }
+    /// Experts [x0, x1) of L into staging buffer b (expert x at (x - x0) * stride), on the copy stream.
+    void stream_copy(int b, const Layer& L, const Hy& H, int x0, int x1, bool whole) {
+        if (whole) {
+            CK(cudaMemcpyAsync(stage[b], L.hblobs + (size_t) x0 * L.stride, L.stride * (size_t) (x1 - x0), cudaMemcpyHostToDevice, cst));
         } else {
-            for (int x = 0; x < ne;) {
+            const int ne = x1;
+            for (int x = x0; x < ne;) {
                 const bool dev = H.slot_of[(size_t) x] >= 0;
                 int y = x + 1;
                 if (dev)   // consecutive slots holding consecutive experts
@@ -2344,15 +2369,27 @@ struct Engine {
                     while (y < ne && H.slot_of[(size_t) y] < 0 && !stream_cpu[b][(size_t) y]) ++y;
                 const size_t n = (size_t) (y - x) * L.stride;
                 if (dev)
-                    CK(cudaMemcpyAsync(stage[b] + (size_t) x * L.stride, L.blobs + (size_t) H.slot_of[(size_t) x] * L.stride,
+                    CK(cudaMemcpyAsync(stage[b] + (size_t) (x - x0) * L.stride, L.blobs + (size_t) H.slot_of[(size_t) x] * L.stride,
                                        n, cudaMemcpyDeviceToDevice, cst));
                 else
-                    CK(cudaMemcpyAsync(stage[b] + (size_t) x * L.stride, L.hblobs + (size_t) x * L.stride, n,
+                    CK(cudaMemcpyAsync(stage[b] + (size_t) (x - x0) * L.stride, L.hblobs + (size_t) x * L.stride, n,
                                        cudaMemcpyHostToDevice, cst));
                 x = y;
             }
         }
+    }
+    /// The next part [x0, x1) of the current streamed layer into its buffer, once the main stream is done with the
+    /// part before; the main stream waits for it.
+    void stream_next_part(int li, int x0, int x1) {
+        const int b = stream_pos % 2;
+        const Layer& L = layer_at(li);
+        static const bool all = std::getenv("STRATA_Q36_STREAM_ALL") != nullptr;
+        static const bool runs = [] { const char* v = std::getenv("STRATA_Q36_STREAM_RUNS"); return v && v[0] == '1'; }();
+        CK(cudaEventRecord(ev_used[b], st));
+        CK(cudaStreamWaitEvent(cst, ev_used[b], 0));
+        stream_copy(b, L, hy[(size_t) li], x0, x1, all || (!runs && 2 * L.n_slots < (int) m->g.n_expert));
         CK(cudaEventRecord(ev_copy[b], cst));
+        CK(cudaStreamWaitEvent(st, ev_copy[b], 0));
     }
     const uint8_t* stream_take(int li) {
         if (stream_pos >= (int) stream_seq.size() || stream_seq[(size_t) stream_pos] != li) {
@@ -3095,6 +3132,18 @@ struct Engine {
         reset();
         std::fprintf(stderr, "strata-q36: warmed up in %.1f s (one prompt chunk, a decode step%s)\n",
                      ms_since(t0) / 1000.0, mtp_d > 0 ? ", a speculative step" : "");
+        if (std::getenv("STRATA_Q36_MEMLOG")) {
+            std::vector<std::pair<size_t, int>> v;
+            size_t tot = 0;
+            for (auto& [l, b] : memlog()) { v.push_back({b, l}); tot += b; }
+            std::sort(v.rbegin(), v.rend());
+            std::fprintf(stderr, "strata-q36: memlog: %.2f GiB in dalloc\n", tot / 1073741824.0);
+            for (size_t i = 0; i < v.size() && i < 20; ++i)
+                std::fprintf(stderr, "  line %d: %.1f MiB\n", v[i].second, v[i].first / 1048576.0);
+            size_t fr = 0, to = 0;
+            cudaMemGetInfo(&fr, &to);
+            std::fprintf(stderr, "  free now %.2f GiB of %.2f\n", fr / 1073741824.0, to / 1073741824.0);
+        }
     }
 
     int greedy() {
@@ -3212,6 +3261,19 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     E.mtp_graph = false;                      // the MTP block's layer is hybrid either way
     E.hybrid_t = std::max(1, std::min(hybrid_t, E.use_mmq ? E.tmax : E.tmax));
     if (!E.use_mmq) E.hybrid_t = E.tmax;   // no streamed prompt path: every batch on slots + the pool
+    // STRATA_Q36_STAGE_SPLIT=1: the staging buffers sized for the most common layer size, a larger layer (Ornith's
+    // Q5_K blk.47, its MTP block) streamed in parts: ~1.1 GiB more for expert slots on Ornith IQ3_XS
+    if (const char* sv = std::getenv("STRATA_Q36_STAGE_SPLIT"); sv && sv[0] == '1') {
+        std::map<size_t, int> cnt;
+        for (Layer* L : all) ++cnt[L->stride * (size_t) ne];
+        size_t mode = max_layer;
+        int best = 0;
+        for (auto& [sz, c] : cnt) if (c > best) { best = c; mode = sz; }
+        if (mode < max_layer) {
+            E.stage_cap = mode;
+            max_layer = mode;
+        }
+    }
     const size_t staging = E.use_mmq && E.main_hybrid ? 2 * (max_layer + kMmqTail) : 0;
     size_t slot_bytes = budget2 > staging ? budget2 - staging : 0;
     if (slot_bytes + staging + ((size_t) 256 << 20) > fr) slot_bytes = fr > staging + ((size_t) 512 << 20) ? fr - staging - ((size_t) 512 << 20) : 0;
@@ -4154,10 +4216,12 @@ int strata::qwen35::run(int argc, char** argv) {
         if (strata::core::geometry_from_gguf(probe.meta(), pg, pk, perr) && pg.n_embd == 3072 && pg.n_ff == 1024) {
             env_default("STRATA_Q8_PACKED", "0");         // the VRAM for 9 more expert slots per layer instead
             env_default("STRATA_Q36_STREAM_RUNS", "1");   // prompt chunks copy only the non-resident experts
-            env_default("STRATA_Q36_FETCH", "0.5");
-            env_default("STRATA_Q36_STREAM_CPU", "auto");   // short prompt chunks: part of the missing experts on the CPU       // half the missed experts over PCIe beside the CPU pool
+            env_default("STRATA_Q36_FETCH", "0.5");         // half the missed experts over PCIe beside the CPU pool
+            env_default("STRATA_Q36_STREAM_CPU", "auto");   // short prompt chunks: part of the missing experts on the CPU
+            env_default("STRATA_Q36_STAGE_SPLIT", "1");     // staging for the IQ3_S layers, blk.47 / MTP in parts
             std::fprintf(stderr, "strata-q36: Ornith-1.5 geometry: its measured defaults (STRATA_Q8_PACKED=0, "
-                         "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5, STRATA_Q36_STREAM_CPU=auto; set any to override)\n");
+                         "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5, STRATA_Q36_STREAM_CPU=auto, "
+                         "STRATA_Q36_STAGE_SPLIT=1; set any to override)\n");
         }
     }
 #if !defined(_WIN32)
