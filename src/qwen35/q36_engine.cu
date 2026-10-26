@@ -62,6 +62,7 @@
 #include <tuple>
 #include <type_traits>
 #include <vector>
+#include <unordered_map>
 
 namespace {
 
@@ -890,6 +891,7 @@ struct Model {
     const float* out_norm = nullptr;
     Mat head;
     const uint8_t* embd = nullptr;
+    std::vector<uint8_t> embd_host;   // STRATA_Q36_EMBD_CPU: the table in host memory instead (embd null)
     int embd_type = -1;
     size_t embd_row = 0;
 };
@@ -1174,11 +1176,22 @@ bool load(const std::string& path, Model& m, std::string& err, bool want_mtp) {
         m.embd_type = (int) t->type;
         m.embd_row = row_bytes(m.embd_type, (int64_t) t->shape[0]);
         const uint64_t nb = strata::tensor_payload_bytes(*t);
-        uint8_t* d = nullptr;
-        CK(cudaMalloc(&d, nb));
-        CK(cudaMemcpy(d, gm.shard(s).tensor_data(*t), nb, cudaMemcpyHostToDevice));
-        m.embd = d;
-        bytes += nb;
+#if defined(STRATA_Q36_CPU_POOL)
+        // STRATA_Q36_EMBD_CPU=1: the token embedding table stays in host memory (one row per token is read; ggml's own
+        // dequantization, the same values) and its VRAM goes to expert slots.  Uploaded after all if every expert fits
+        // in VRAM (the decode graphs read it there).
+        if (const char* ev = std::getenv("STRATA_Q36_EMBD_CPU"); ev && ev[0] == '1' && ggml_get_type_traits((ggml_type) m.embd_type)->to_float) {
+            m.embd_host.assign(gm.shard(s).tensor_data(*t), gm.shard(s).tensor_data(*t) + nb);
+            std::fprintf(stderr, "strata-q36: token embedding table in host memory (%.2f GiB)\n", (double) nb / (1 << 30));
+        } else
+#endif
+        {
+            uint8_t* d = nullptr;
+            CK(cudaMalloc(&d, nb));
+            CK(cudaMemcpy(d, gm.shard(s).tensor_data(*t), nb, cudaMemcpyHostToDevice));
+            m.embd = d;
+            bytes += nb;
+        }
     }
     std::fprintf(stderr, "strata-q36: %s: %zu tensors (layout checked), %.2f GiB on the GPU in %.1f s (the routed "
                  "experts are placed after the engine's buffers)\n", path.c_str(), checked, (double) bytes / (1 << 30),
@@ -2207,6 +2220,41 @@ struct Engine {
     /// The main model over T rows (device `tok`, positions p0 .. p0 + T - 1, also at *pos0): hmain gets every row's
     /// final normed hidden; `heads` rows from the end get logits (rows [T - heads, T): logits row r - (T - heads)) and
     /// their greedy picks (`pick`).  `verify`: a verify window (the GDN state left for commit()).
+    /// Token ids into tok (which 0) or tok_m (which 1) from host memory.  With the host embedding table
+    /// (STRATA_Q36_EMBD_CPU) their rows are looked up here, where the host has the ids, and uploaded beside them, so
+    /// embed() needs no round trip: a device copy.
+    float* emb_hf[2] = {};
+    float* emb_d[2] = {};
+    cudaEvent_t emb_ev[2] = {};
+    void put_tok(int which, const int32_t* src, int T) {
+        int32_t* dst = which ? tok_m : tok;
+        CK(cudaMemcpyAsync(dst, src, (size_t) T * 4, cudaMemcpyHostToDevice, st));
+#if defined(STRATA_Q36_CPU_POOL)
+        if (m->embd) return;
+        const int N = (int) m->g.n_embd;
+        if (!emb_d[which]) {
+            CK(cudaHostAlloc((void**) &emb_hf[which], (size_t) tmax * N * 4, cudaHostAllocDefault));
+            CK(cudaMalloc((void**) &emb_d[which], (size_t) tmax * N * 4));
+            CK(cudaEventCreateWithFlags(&emb_ev[which], cudaEventDisableTiming));
+            CK(cudaEventRecord(emb_ev[which], st));
+        }
+        CK(cudaEventSynchronize(emb_ev[which]));   // the last upload from this host buffer has run
+        const auto* tr = ggml_get_type_traits((ggml_type) m->embd_type);
+        for (int t = 0; t < T; ++t)
+            tr->to_float(m->embd_host.data() + (size_t) src[t] * m->embd_row, emb_hf[which] + (size_t) t * N, N);
+        CK(cudaMemcpyAsync(emb_d[which], emb_hf[which], (size_t) T * N * 4, cudaMemcpyHostToDevice, st));
+        CK(cudaEventRecord(emb_ev[which], st));
+#endif
+    }
+    /// The embedding rows of the T token ids at dtok (tok or tok_m) into out.
+    void embed(const int32_t* dtok, int T, float* out) {
+        const int N = (int) m->g.n_embd;
+        if (m->embd) {
+            K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, dtok, T, N, out, st);
+            return;
+        }
+        CK(cudaMemcpyAsync(out, emb_d[dtok == tok_m ? 1 : 0], (size_t) T * N * 4, cudaMemcpyDeviceToDevice, st));
+    }
     void forward(int T, int64_t p0, int heads, bool graph_mode, bool verify) {
         const auto& g = m->g;
         const int N = (int) g.n_embd;
@@ -2217,7 +2265,7 @@ struct Engine {
             stream_T = T;
             stream_begin(seq);
         }
-        K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, tok, T, N, x, st);
+        embed(tok, T, x);
         if (map_on) k_put_rows<<<T, kThreads, 0, st>>>(x, d_img, d_map, N);   // a picture's cells take its rows
         k_rms<<<T, kThreads, 0, st>>>(x, m->layers[0].attn_norm, h, N, m->eps);   // later layers: from k_moe_out
         for (size_t l = 0; l < m->layers.size(); ++l) {
@@ -2278,7 +2326,7 @@ struct Engine {
         const auto& g = m->g;
         const int N = (int) g.n_embd;
         if (main_hybrid && lhy(m->layers.size()) && T > hybrid_t && use_mmq) stream_begin({(int) m->layers.size()});
-        K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, tok_m, T, N, y, st);
+        embed(tok_m, T, y);
         if (map_on) k_put_rows<<<T, kThreads, 0, st>>>(y, d_img, d_map, N);
         k_rms_ld<<<T, kThreads, 0, st>>>(y, N, m->mtp_enorm, mtp_cat, 2 * N, N, m->eps);              // [e | ...]
         k_rms_ld<<<T, kThreads, 0, st>>>(seeds, N, m->mtp_hnorm, mtp_cat + N, 2 * N, N, m->eps);      // [... | h]
@@ -2307,6 +2355,11 @@ struct Engine {
 
     /// A streamed forward over the state indices `seq`: the first two layers' experts start copying now.
     void stream_begin(const std::vector<int>& seq) {
+        if (fc_valid) {   // the decode cache's cells are overwritten: after their last reader
+            fc_valid = false;
+            CK(cudaEventRecord(ev_used[0], st));
+            CK(cudaEventRecord(ev_used[1], st));
+        }
         stream_seq = seq;
         stream_pos = 0;
         for (int i = 0; i < 2 && i < (int) seq.size(); ++i) stream_kick(i);
@@ -2541,11 +2594,70 @@ struct Engine {
             for (auto& ev : ev_ftab) CK(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming));
             CK(cudaEventRecord(ev_fdone, st));
         }
-        // the blobs: after the previous call's kernel has read the buffer
-        CK(cudaStreamWaitEvent(fst, ev_fdone, 0));
-        for (int i = 0; i < nf; ++i)
-            CK(cudaMemcpyAsync(fbuf + (size_t) i * L.stride, L.hblobs + (size_t) miss[(size_t) i] * L.stride, L.L.bytes,
-                               cudaMemcpyHostToDevice, fst));
+        // STRATA_Q36_FETCH_CACHE=1: the prompt's staging buffers, idle in decode, hold fetched experts across steps
+        // (least recently used out): a miss already there runs on the GPU with no copy, and the share F of the other
+        // misses is copied in.  Cleared when a prompt chunk streams into the buffers.
+        std::vector<const uint8_t*> ptrs((size_t) nf);
+        static const bool use_cache = [] { const char* v = std::getenv("STRATA_Q36_FETCH_CACHE"); return v && v[0] == '1'; }();
+        if (use_cache && stage[0] && stage_bytes > 0) {
+            if (fc_cell == 0) {
+                size_t smax = 0;
+                for (const Layer& y : m->layers) smax = std::max(smax, y.stride);
+                if (m->has_mtp) smax = std::max(smax, m->mtp.stride);
+                fc_cell = (smax + 255) & ~(size_t) 255;
+                fc_per = (int) ((stage_bytes - kMmqTail) / fc_cell);
+                fc_key.assign((size_t) 2 * fc_per, -1);
+                fc_stamp.assign((size_t) 2 * fc_per, 0);
+            }
+            if (!fc_valid) {   // after a prompt: nothing cached, and copies wait for the prompt's last reader
+                std::fill(fc_key.begin(), fc_key.end(), -1);
+                fc_map.clear();
+                CK(cudaEventRecord(ev_fdone, st));
+                fc_valid = true;
+            }
+            const int li = &L == &m->mtp ? (int) m->layers.size() : (int) (&L - m->layers.data());
+            ++fc_now;
+            // every miss: cached ones are free; of the rest the most used, the share F, are copied
+            std::vector<int> allm, hit, cold;
+            for (int x = 0; x < ne; ++x)
+                if (cnt[(size_t) x] > 0) (fc_map.count((int64_t) li * 4096 + x) ? hit : cold).push_back(x);
+            std::stable_sort(cold.begin(), cold.end(), [&](int a, int b) { return cnt[(size_t) a] > cnt[(size_t) b]; });
+            int nc = std::min<int>((int) std::lround(frac * (double) cold.size()), kFetchMax);
+            nc = std::min(nc, 2 * fc_per - (int) hit.size());
+            for (int x : hit) fc_stamp[(size_t) fc_map[(int64_t) li * 4096 + x]] = fc_now;
+            CK(cudaStreamWaitEvent(fst, ev_fdone, 0));   // an evicted cell's last reader has run
+            miss.clear();
+            ptrs.clear();
+            for (int x : hit) { miss.push_back(x); }
+            for (int i = 0; i < nc; ++i) {
+                int v = -1;
+                int64_t best = INT64_MAX;
+                for (int c = 0; c < 2 * fc_per; ++c)
+                    if (fc_stamp[(size_t) c] < best) { best = fc_stamp[(size_t) c]; v = c; }
+                if (v < 0 || best == fc_now) break;
+                if (fc_key[(size_t) v] >= 0) fc_map.erase(fc_key[(size_t) v]);
+                const int64_t key = (int64_t) li * 4096 + cold[(size_t) i];
+                fc_key[(size_t) v] = key;
+                fc_stamp[(size_t) v] = fc_now;
+                fc_map[key] = v;
+                CK(cudaMemcpyAsync(fc_ptr(v), L.hblobs + (size_t) cold[(size_t) i] * L.stride, L.L.bytes,
+                                   cudaMemcpyHostToDevice, fst));
+                miss.push_back(cold[(size_t) i]);
+            }
+            std::sort(miss.begin(), miss.end());
+            for (int x : miss) ptrs.push_back(fc_ptr(fc_map[(int64_t) li * 4096 + x]));
+            nf = (int) miss.size();
+            fc_hits += (int64_t) hit.size();
+            if (nf == 0) return;
+        } else {
+            // the blobs: after the previous call's kernel has read the buffer
+            CK(cudaStreamWaitEvent(fst, ev_fdone, 0));
+            for (int i = 0; i < nf; ++i) {
+                CK(cudaMemcpyAsync(fbuf + (size_t) i * L.stride, L.hblobs + (size_t) miss[(size_t) i] * L.stride, L.L.bytes,
+                                   cudaMemcpyHostToDevice, fst));
+                ptrs[(size_t) i] = fbuf + (size_t) i * L.stride;
+            }
+        }
         CK(cudaEventRecord(ev_fcopy, fst));
         // the tables (this parity's pinned copy is free once its last upload ran)
         const int b = fpar;
@@ -2562,7 +2674,7 @@ struct Engine {
         int pos = 0;
         for (int i = 0; i < nf; ++i) {
             const int x = miss[(size_t) i];
-            tp[i] = (unsigned long long) (fbuf + (size_t) i * L.stride);
+            tp[i] = (unsigned long long) ptrs[(size_t) i];
             ts[i] = pos;
             for (int e = 0; e < n_ent; ++e)
                 if (h_ids[e] == x) { td[pos] = e; tt[pos] = e / Kp; ++pos; }
@@ -2581,6 +2693,14 @@ struct Engine {
         hy_fetch += nf;
     }
     int64_t hy_fetch = 0;
+    // STRATA_Q36_FETCH_CACHE: cells of fc_cell bytes, fc_per in each staging buffer
+    size_t fc_cell = 0, stage_bytes = 0;
+    int fc_per = 0;
+    bool fc_valid = false;
+    int64_t fc_now = 0, fc_hits = 0;
+    std::vector<int64_t> fc_key, fc_stamp;
+    std::unordered_map<int64_t, int> fc_map;
+    uint8_t* fc_ptr(int c) { return stage[c / fc_per] + (size_t) (c % fc_per) * fc_cell; }
     std::vector<char> stream_cpu[2];
     int stream_T = 0;
     bool fetch_off = false;
@@ -2801,7 +2921,7 @@ struct Engine {
             CK(cudaStreamSynchronize(st));   // the pinned staging is free again
             hpin[0] = toks[0];
             hpin[1] = (int32_t) pos;
-            CK(cudaMemcpyAsync(tok, hpin, 4, cudaMemcpyHostToDevice, st));
+            put_tok(0, hpin, 1);
             CK(cudaMemcpyAsync(pos0, hpin + 1, 4, cudaMemcpyHostToDevice, st));
             chunk_pictures(pos, 1);
             rows_deferred = true;
@@ -2821,7 +2941,7 @@ struct Engine {
             const int T = (int) std::min<int64_t>(tmax, n - i);
             CK(cudaStreamSynchronize(st));
             hpin[1] = (int32_t) pos;
-            CK(cudaMemcpyAsync(tok, toks + i, (size_t) T * 4, cudaMemcpyHostToDevice, st));
+            put_tok(0, toks + i, T);
             CK(cudaMemcpyAsync(pos0, hpin + 1, 4, cudaMemcpyHostToDevice, st));
             chunk_pictures(pos, T);
             forward(T, pos, i + T == n ? 1 : 0, false, false);
@@ -2830,7 +2950,7 @@ struct Engine {
                 CK(cudaMemcpyAsync(mtp_seed(), hlast, (size_t) N * 4, cudaMemcpyDeviceToDevice, st));
                 if (T > 1)
                     CK(cudaMemcpyAsync(mtp_seed() + N, hmain, (size_t) (T - 1) * N * 4, cudaMemcpyDeviceToDevice, st));
-                CK(cudaMemcpyAsync(tok_m, toks + i, (size_t) T * 4, cudaMemcpyHostToDevice, st));
+                put_tok(1, toks + i, T);
                 CK(cudaMemcpyAsync(pos0_m, hpin + 1, 4, cudaMemcpyHostToDevice, st));
                 forward_mtp(T, pos, mtp_seed(), false, false);
             }
@@ -2885,7 +3005,7 @@ struct Engine {
             }
             pmax = std::max<int64_t>(pmax, ss.pos + gr[g].n - 1);
         }
-        CK(cudaMemcpyAsync(tok, hrow, (size_t) T * 4, cudaMemcpyHostToDevice, st));
+        put_tok(0, hrow, T);
         CK(cudaMemcpyAsync(d_rcell, hrow + 8, (size_t) T * 4, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync(d_rslot, hrow + 16, (size_t) T * 4, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync(d_rdelta, hrow + 24, (size_t) T * 4, cudaMemcpyHostToDevice, st));
@@ -2970,7 +3090,7 @@ struct Engine {
             pmax = std::max<int64_t>(pmax, rows[r].cell);
             CK(cudaMemcpyAsync(mtp_seed() + (size_t) r * N, rows[r].seed, (size_t) N * 4, cudaMemcpyDeviceToDevice, st));
         }
-        CK(cudaMemcpyAsync(tok_m, hrow, (size_t) T * 4, cudaMemcpyHostToDevice, st));
+        put_tok(1, hrow, T);
         CK(cudaMemcpyAsync(d_rcell, hrow + 8, (size_t) T * 4, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync(d_rslot, hrow + 16, (size_t) T * 4, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync(d_rdelta, hrow + 24, (size_t) T * 4, cudaMemcpyHostToDevice, st));
@@ -2980,7 +3100,7 @@ struct Engine {
         rows_G = T;
         rows_deferred = true;
         run_graph_key(3000 + T, [&] {
-            K::iq_embed_rows(m->embd_type, m->embd, m->embd_row, tok_m, T, N, y, st);
+            embed(tok_m, T, y);
             k_rms_ld<<<T, kThreads, 0, st>>>(y, N, m->mtp_enorm, mtp_cat, 2 * N, N, m->eps);                 // [e | ...]
             k_rms_ld<<<T, kThreads, 0, st>>>(mtp_seed(), N, m->mtp_hnorm, mtp_cat + N, 2 * N, N, m->eps);   // [... | h]
             mm(m->eh_proj, mtp_cat, x, T);
@@ -3055,7 +3175,7 @@ struct Engine {
         for (int i = 0; i < (int) fix.size(); ++i) hpin[16 + i] = fix[(size_t) i];
         hpin[16 + fix.size()] = x_tok;
         hpin[1] = (int32_t) (pos - (int64_t) fix.size());
-        CK(cudaMemcpyAsync(tok_m, hpin + 16, (size_t) T0 * 4, cudaMemcpyHostToDevice, st));
+        put_tok(1, hpin + 16, T0);
         CK(cudaMemcpyAsync(pos0_m, hpin + 1, 4, cudaMemcpyHostToDevice, st));
         // seeds: hmain rows 0 .. fix - 1 are the h of the positions before the fixed rows; hlast is that before x
         float* seeds = mtp_seed();
@@ -3073,7 +3193,7 @@ struct Engine {
         for (int d = 1; d < D; ++d) {   // chained: (the block's own output, the last draft) at the next position
             hpin[0] = drafts[(size_t) d - 1];
             hpin[1] = (int32_t) (pos + d);
-            CK(cudaMemcpyAsync(tok_m, hpin, 4, cudaMemcpyHostToDevice, st));
+            put_tok(1, hpin, 1);
             CK(cudaMemcpyAsync(pos0_m, hpin + 1, 4, cudaMemcpyHostToDevice, st));
             CK(cudaMemcpyAsync(seeds, hmtp + (size_t) last_row * N, (size_t) N * 4, cudaMemcpyDeviceToDevice, st));
             last_row = 0;
@@ -3088,7 +3208,7 @@ struct Engine {
         hpin[16] = x_tok;
         for (int d = 0; d < D; ++d) hpin[17 + d] = drafts[(size_t) d];
         hpin[1] = (int32_t) pos;
-        CK(cudaMemcpyAsync(tok, hpin + 16, (size_t) T * 4, cudaMemcpyHostToDevice, st));
+        put_tok(0, hpin + 16, T);
         CK(cudaMemcpyAsync(pos0, hpin + 1, 4, cudaMemcpyHostToDevice, st));
         rows_deferred = true;
         graph_run(gs().gv[T], [&] { forward(T, pos, T, use_graph, true); });
@@ -3243,6 +3363,12 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
             }
             L->n_slots = (int) ne;
         }
+        if (!m.embd_host.empty()) {   // (the decode graphs read the table on the GPU)
+            uint8_t* d = nullptr;
+            CK(cudaMalloc(&d, m.embd_host.size()));
+            CK(cudaMemcpy(d, m.embd_host.data(), m.embd_host.size(), cudaMemcpyHostToDevice));
+            m.embd = d;
+        }
         std::fprintf(stderr, "strata-q36: every routed expert in VRAM (%.2f GiB) in %.1f s\n", (double) total / (1 << 30),
                      ms_since(t0) / 1000.0);
         return true;
@@ -3257,6 +3383,12 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
     namespace C = strata::kernels::cpu;
     m.hybrid = true;
     E.main_hybrid = !mtp_only;
+    if (!E.main_hybrid && !m.embd_host.empty() && !m.embd) {   // the main layers keep their decode graphs: the table on the GPU
+        uint8_t* d = nullptr;
+        CK(cudaMalloc(&d, m.embd_host.size()));
+        CK(cudaMemcpy(d, m.embd_host.data(), m.embd_host.size(), cudaMemcpyHostToDevice));
+        m.embd = d;
+    }
     if (E.main_hybrid) E.use_graph = false;   // the host takes part in every layer
     E.mtp_graph = false;                      // the MTP block's layer is hybrid either way
     E.hybrid_t = std::max(1, std::min(hybrid_t, E.use_mmq ? E.tmax : E.tmax));
@@ -3391,6 +3523,7 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         CK(cudaStreamCreateWithFlags(&E.cst, cudaStreamNonBlocking));
         for (int b = 0; b < 2; ++b) {
             CK(cudaMalloc(&E.stage[b], max_layer + kMmqTail));
+            E.stage_bytes = max_layer + kMmqTail;
             CK(cudaMemset(E.stage[b], 0, max_layer + kMmqTail));
             CK(cudaEventCreateWithFlags(&E.ev_copy[b], cudaEventDisableTiming));
             CK(cudaEventCreateWithFlags(&E.ev_used[b], cudaEventDisableTiming));
@@ -4219,9 +4352,10 @@ int strata::qwen35::run(int argc, char** argv) {
             env_default("STRATA_Q36_FETCH", "0.5");         // half the missed experts over PCIe beside the CPU pool
             env_default("STRATA_Q36_STREAM_CPU", "auto");   // short prompt chunks: part of the missing experts on the CPU
             env_default("STRATA_Q36_STAGE_SPLIT", "1");     // staging for the IQ3_S layers, blk.47 / MTP in parts
+            env_default("STRATA_Q36_FETCH_CACHE", "1");     // the staging buffers keep fetched experts during decode
             std::fprintf(stderr, "strata-q36: Ornith-1.5 geometry: its measured defaults (STRATA_Q8_PACKED=0, "
                          "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5, STRATA_Q36_STREAM_CPU=auto, "
-                         "STRATA_Q36_STAGE_SPLIT=1; set any to override)\n");
+                         "STRATA_Q36_STAGE_SPLIT=1, STRATA_Q36_FETCH_CACHE=1; set any to override)\n");
         }
     }
 #if !defined(_WIN32)
@@ -4304,8 +4438,8 @@ int strata::qwen35::run(int argc, char** argv) {
             if (!E.m->hybrid) return;
             const long long n = E.hy_cpu + E.hy_gpu;
             std::fprintf(stderr, "strata-q36: hybrid experts: %lld of %lld batch entries on the GPU (%.1f%%), %lld on the "
-                         "CPU pool in %.0f ms, %lld slot replacements, %lld experts fetched over PCIe\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
-                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps, (long long) E.hy_fetch);
+                         "CPU pool in %.0f ms, %lld slot replacements, %lld experts fetched over PCIe, %lld from the fetch cache\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
+                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps, (long long) E.hy_fetch, (long long) E.fc_hits);
         }
     } report{E};
     E.reset();
