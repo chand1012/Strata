@@ -4475,9 +4475,10 @@ int strata::qwen35::run(int argc, char** argv) {
             env_default("STRATA_Q36_FETCH_CACHE", "1");     // the staging buffers keep fetched experts during decode
             env_default("STRATA_Q36_FETCH_ADAPT", "1");     // the fetch share follows the PCIe / CPU balance per layer
             env_default("STRATA_Q36_FETCH_STEP", "0.005");
+            env_default("STRATA_IQ_MT_MIN", "1");           // the AVX2 multi-token IQ3_S rows for one token too (+9% decode)
             std::fprintf(stderr, "strata-q36: Ornith-1.5 geometry: its measured defaults (STRATA_Q8_PACKED=0, "
                          "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5, STRATA_Q36_STREAM_CPU=auto, "
-                         "STRATA_Q36_STAGE_SPLIT=1, STRATA_Q36_FETCH_CACHE=1, STRATA_Q36_FETCH_ADAPT=1; set any to override)\n");
+                         "STRATA_Q36_STAGE_SPLIT=1, STRATA_Q36_FETCH_CACHE=1, STRATA_Q36_FETCH_ADAPT=1, STRATA_IQ_MT_MIN=1; set any to override)\n");
         }
     }
 #if !defined(_WIN32)

@@ -112,3 +112,22 @@ Idea 3 (overlap PCIe and CPU in decode), teacher-forced 256-token decode (`dec2.
   Output changes (which experts run on the GPU): ornith_kl.py mean KL 0.0197 vs floor 0.0381, PASS. Kept: Ornith
   default, step 0.005.
 | + STRATA_Q36_FETCH_ADAPT=1 | 229.8 | 24.8 | 580.7 | 20.1 | 583.4 | 21.6 | 20.9 (64%) |
+
+Idea 4 (CPU expert kernels). `kq_cpu_bench --h 3072 --ff 1024 --pairs iq3_s/iq3_s --threads 8 --nt 1 --mb 2048`:
+| switch | GB/s of weights | ms per expert per thread |
+|---|---|---|
+| default | 19.9 | 1.634 |
+| STRATA_IQ_MT_MIN=1 (multi-token AVX2 rows for one token too) | 23.5 | 1.379 |
+| + STRATA_IQ256_GATHER=1 | 25.4 | 1.279 |
+| STRATA_IQ_PREFETCH=0 / 4096, GATHER=0, CPU_IQ_ALL_EXACT1=0 | 19.8-20.0 | same as default |
+RAM read bandwidth (AVX2 loads, `~/work/membw.c`): 21.3 GB/s on 1 thread, 35.0 on 4, 34.5 on 8. One core
+decodes IQ3_S at ~2.9 GB/s, so the kernel is compute-bound, with at most ~1.5x left before RAM limits it.
+- STRATA_IQ_MT_MIN=1: teacher-forced decode 23.6 / 23.6 vs 21.6 / 21.5; free chat 21.6 / 21.7 vs 20.4 / 20.7
+  (paired runs). It changes rounding (one token's rows on the multi-token kernel): ornith_kl.py mean KL 0.0312 vs
+  floor 0.0381, PASS. As a side effect, a token's rows no longer depend on how many drafts share its expert. Kept:
+  Ornith default.
+- STRATA_IQ256_GATHER=1: logits not identical to the default decode, and end to end 22.1 / 23.2 (no gain). Not kept.
+- --cpu-threads with MT_MIN=1: 7 21.2, 10 21.7, 12 22.3, 8 (default) 23.6. Kept 8.
+- A new lossless IQ3_S layout: not built. The kernel is compute-bound on the grid lookups (above); a new layout and
+  its parity tests are a larger project than this round. Noted as a follow-up.
+| + STRATA_IQ_MT_MIN=1 | 223.8 | 25.0 | 581.1 | 21.0 | 582.3 | 21.4 (21.6 / 21.7 paired) | 22.8 (73%) |
