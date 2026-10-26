@@ -1325,6 +1325,8 @@ struct Engine {
     struct Hy {
         std::vector<int> slot_of, exp_in_slot;
         std::vector<double> score;   // routing counts, halved at each rebalance
+        std::vector<double> total;   // routing counts over the whole run (STRATA_Q36_PROFILE_OUT)
+        std::vector<double> prior;   // STRATA_Q36_PROFILE: added to the score at each rebalance (a floor for hot experts)
         int32_t* slot_of_d = nullptr;
 #if defined(STRATA_Q36_CPU_POOL)
         strata::kernels::cpu::NativeFmt fmt;
@@ -1366,7 +1368,7 @@ struct Engine {
         const int Kp = (int) m->top_k;
         for (size_t li = 0; li < row_ids.size() && li < hy.size(); ++li)
             if (!row_ids[li].empty())
-                for (int e = 0; e < n * Kp; ++e) hy[li].score[(size_t) row_ids[li][(size_t) e]] += 1.0;
+                for (int e = 0; e < n * Kp; ++e) { hy[li].score[(size_t) row_ids[li][(size_t) e]] += 1.0; hy[li].total[(size_t) row_ids[li][(size_t) e]] += 1.0; }
     }
     void after_rows(int n) {   // a decode step / verify window kept n rows: count them, rebalance at the boundary
         if (!m->hybrid) return;
@@ -2142,7 +2144,7 @@ struct Engine {
             if (lhy(li)) CK(cudaMemcpyAsync(h_cnt + li * g.n_expert, rcnt, (size_t) ne * 4, cudaMemcpyDeviceToHost, st));
             CK(cudaStreamSynchronize(st));
             if (lhy(li))
-                for (int x = 0; x < ne; ++x) hy[li].score[(size_t) x] += h_cnt[li * g.n_expert + x];
+                for (int x = 0; x < ne; ++x) { hy[li].score[(size_t) x] += h_cnt[li * g.n_expert + x]; hy[li].total[(size_t) x] += h_cnt[li * g.n_expert + x]; }
             const int64_t maxr = hpin[10];
             const uint8_t* wbase = lhy(li) ? stream_take((int) li) : L.blobs;
             MMQ::quantize(h, ent_tok, mq_x, L.L.gu_type, N, N, n_ent, st);
@@ -2734,7 +2736,7 @@ struct Engine {
         }
         for (int e = 0; e < n_ent; ++e) {
             const int x = h_ids[e];
-            if (!defer) H.score[(size_t) x] += 1.0;
+            if (!defer) { H.score[(size_t) x] += 1.0; H.total[(size_t) x] += 1.0; }
             static const bool all_cpu = std::getenv("STRATA_Q36_ALL_CPU") != nullptr;   // debug: every entry on the pool
             h_miss[e] = (all_cpu || H.slot_of[(size_t) x] < 0) && !fetched[(size_t) x];
             if (!h_miss[e]) continue;
@@ -2816,7 +2818,7 @@ struct Engine {
             }
             if (changed)
                 CK(cudaMemcpyAsync(H.slot_of_d, H.slot_of.data(), (size_t) ne * 4, cudaMemcpyHostToDevice, st));
-            for (double& v : H.score) v *= 0.5;
+            for (size_t x = 0; x < H.score.size(); ++x) H.score[x] = 0.5 * H.score[x] + (H.prior.empty() ? 0.0 : H.prior[x]);
         }
         CK(cudaStreamSynchronize(st));   // slot_of's host copy is pageable: the upload is done before it changes
     }
@@ -3246,7 +3248,10 @@ struct Engine {
         }
         CK(cudaStreamSynchronize(st));
         warming = false;
-        for (Hy& H : hy) std::fill(H.score.begin(), H.score.end(), 0.0);
+        for (Hy& H : hy) {
+            for (size_t x = 0; x < H.score.size(); ++x) H.score[x] = H.prior.empty() ? 0.0 : 2.0 * H.prior[x];
+            std::fill(H.total.begin(), H.total.end(), 0.0);
+        }
         hy_cpu = hy_gpu = hy_swaps = 0;
         hy_cpu_ms = 0;
         reset();
@@ -3488,19 +3493,49 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, int hybrid
         std::memset(L.hblobs, 0, L.stride * (size_t) ne + kMmqTail);
         for (int64_t e = 0; e < ne; ++e) expert_blob(L, e, L.hblobs + (size_t) e * L.stride);
         L.n_slots = S;
+        Engine::Hy& H = E.hy[li];
+        H.score.assign((size_t) ne, 0.0);
+        H.total.assign((size_t) ne, 0.0);
+        // STRATA_Q36_PROFILE=F (a STRATA_Q36_PROFILE_OUT file of an earlier run: [layer][expert] f64 counts): the slots
+        // start with each layer's most used experts, and the counts stay a floor under the routing scores
+        // (STRATA_Q36_PROFILE_W, default 1: per layer the floor sums to W x one rebalance window's entries)
+        std::vector<int> first((size_t) ne);
+        for (int x = 0; x < ne; ++x) first[(size_t) x] = x;
+        if (const char* pf = std::getenv("STRATA_Q36_PROFILE")) {
+            static std::vector<double> prof = [&] {
+                std::vector<double> v(all.size() * (size_t) ne, 0.0);
+                if (FILE* f = std::fopen(pf, "rb")) {
+                    const size_t got = std::fread(v.data(), 8, v.size(), f);
+                    std::fclose(f);
+                    if (got != v.size()) { std::fprintf(stderr, "strata-q36: %s: not a profile of this model, ignored\n", pf); v.assign(v.size(), 0.0); }
+                    else std::fprintf(stderr, "strata-q36: expert profile %s\n", pf);
+                }
+                return v;
+            }();
+            const double* pl = prof.data() + li * (size_t) ne;
+            double sum = 0;
+            for (int x = 0; x < ne; ++x) sum += pl[x];
+            if (sum > 0) {
+                static const double w = [] { const char* v = std::getenv("STRATA_Q36_PROFILE_W"); return v ? std::atof(v) : 1.0; }();
+                const double scale = w * (double) Engine::kRebalanceEvery * (double) m.top_k / sum;
+                H.prior.resize((size_t) ne);
+                for (int x = 0; x < ne; ++x) H.prior[(size_t) x] = pl[x] * scale;
+                std::stable_sort(first.begin(), first.end(), [&](int a, int b) { return pl[a] > pl[b]; });
+            }
+        }
         if (S > 0) {
             CK(cudaMalloc(&L.blobs, L.stride * (size_t) S + kMmqTail));
             CK(cudaMemset(L.blobs, 0, L.stride * (size_t) S + kMmqTail));
-            CK(cudaMemcpy(L.blobs, L.hblobs, L.stride * (size_t) S, cudaMemcpyHostToDevice));
+            for (int s = 0; s < S; ++s)
+                CK(cudaMemcpy(L.blobs + (size_t) s * L.stride, L.hblobs + (size_t) first[(size_t) s] * L.stride, L.stride,
+                              cudaMemcpyHostToDevice));
         }
-        Engine::Hy& H = E.hy[li];
         H.slot_of.assign((size_t) ne, -1);
         H.exp_in_slot.assign((size_t) S, 0);
         for (int s = 0; s < S; ++s) {
-            H.slot_of[(size_t) s] = s;
-            H.exp_in_slot[(size_t) s] = s;
+            H.slot_of[(size_t) first[(size_t) s]] = s;
+            H.exp_in_slot[(size_t) s] = first[(size_t) s];
         }
-        H.score.assign((size_t) ne, 0.0);
         CK(cudaMalloc(&H.slot_of_d, (size_t) ne * 4));
         CK(cudaMemcpy(H.slot_of_d, H.slot_of.data(), (size_t) ne * 4, cudaMemcpyHostToDevice));
         if (!C::native_fmt(L.L.gu_type, L.L.d_type, g.n_embd, g.n_ff, H.fmt, err)) return false;
@@ -4440,6 +4475,23 @@ int strata::qwen35::run(int argc, char** argv) {
             std::fprintf(stderr, "strata-q36: hybrid experts: %lld of %lld batch entries on the GPU (%.1f%%), %lld on the "
                          "CPU pool in %.0f ms, %lld slot replacements, %lld experts fetched over PCIe, %lld from the fetch cache\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
                          E.hy_cpu, E.hy_cpu_ms, E.hy_swaps, (long long) E.hy_fetch, (long long) E.fc_hits);
+            // STRATA_Q36_PROFILE_OUT=F: this run's routing counts per layer and expert (f64), added to F when it exists
+            // (a profile of several runs), for STRATA_Q36_PROFILE
+            if (const char* po = std::getenv("STRATA_Q36_PROFILE_OUT")) {
+                const size_t ne = (size_t) E.m->g.n_expert;
+                std::vector<double> v(E.hy.size() * ne, 0.0);
+                if (FILE* f = std::fopen(po, "rb")) {
+                    if (std::fread(v.data(), 8, v.size(), f) != v.size()) std::fill(v.begin(), v.end(), 0.0);
+                    std::fclose(f);
+                }
+                for (size_t li = 0; li < E.hy.size(); ++li)
+                    for (size_t x = 0; x < ne && x < E.hy[li].total.size(); ++x) v[li * ne + x] += E.hy[li].total[x];
+                if (FILE* f = std::fopen(po, "wb")) {
+                    std::fwrite(v.data(), 8, v.size(), f);
+                    std::fclose(f);
+                    std::fprintf(stderr, "strata-q36: routing counts added to %s\n", po);
+                }
+            }
         }
     } report{E};
     E.reset();

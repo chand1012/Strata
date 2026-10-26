@@ -91,3 +91,12 @@ Idea 1 (free VRAM for expert slots), details:
 - KV cache precision: skipped. Measured the whole KV cost at the launch context: 32K 52 slots 19.8 tok/s, 8K 59 slots
   20.4 tok/s; fp16 KV would win back at most half of that 3% and touches the attention kernels and session snapshots.
 - Default context: left at 32K for launch (a user choice; it costs 3% decode against 8K, measured above).
+
+Idea 2 (slot placement), teacher-forced 256-token decode on the code prompt (`dec2.sh`), current defaults = 20.5 tok/s:
+- Hot-expert profile (new opt-in STRATA_Q36_PROFILE / STRATA_Q36_PROFILE_OUT / STRATA_Q36_PROFILE_W): a profile from
+  three other prompts (story, the French one, a 1228-token summary), 256 tokens each. Start slots from it and keep it
+  as a floor under the routing scores: W=1 19.2 / 19.1, W=4 17.9 / 17.8, W=0.25 20.0, W=0 (start slots only) 20.4.
+  Routing follows the current prompt more than a fixed profile, and the post-prompt rebalance (2048 swaps) already
+  places the slots. Kept opt-in, off.
+- Per-layer slot counts by traffic: from the same profile, the share of routed entries the slots cover at the same
+  total VRAM is 53.9% with 59 slots in every layer and 54.0% with the best per-layer split (48..77 slots). Not built.
