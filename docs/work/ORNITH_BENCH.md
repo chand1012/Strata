@@ -76,3 +76,18 @@ the code prompt (`--tokens <ids> --n 256 [--mtp 1]`). Script: ~/work/fullbench.s
 | config | pp512 | tg128 (after pp512) | pp2048 | tg128 (after pp2048) | pp4096 | chat 256 | chat 256 --mtp 1 |
 |---|---|---|---|---|---|---|---|
 | baseline | 226.3 | 19.4 | 569.3 | 15.8 | 573.8 | 17.3 | 19.4 (82%) |
+| STRATA_Q36_STAGE_SPLIT=1 (staging sized for the IQ3_S layers; blk.47 and MTP streamed in 2 parts): 59 instead of 53 slots | 221.6 | 20.2 | 578.4 | 15.2 | 584.3 | 18.1 | 19.7 (75%) |
+| + STRATA_Q36_FETCH_CACHE=1 (decode keeps fetched experts in the idle staging buffers, LRU) | 233.6 | 21.5 | 580.8 | 19.0 | 583.6 | 20.5 | 21.2 (69%) |
+
+Idea 1 (free VRAM for expert slots), details:
+- Stage split: logits bitwise identical with it on and off (same 50 fixed slots, a 1228-token streamed prompt, 16 forced
+  steps). Kept: Ornith default.
+- Fetch cache (reuses the staging buffers during decode instead of freeing them). Fetch share sweep with the cache,
+  teacher-forced 256-token decode (`dec2.sh`): 0.3 17.8, 0.4 19.8, 0.5 20.4 (twice), 0.6 19.6, 0.7 17.5, 1.0 14.0;
+  without the cache 18.2. Output changes (more experts on the GPU): ornith_kl.py mean KL 0.0195 vs floor 0.0381, PASS;
+  long streamed prompt KL 0.040 (before 0.046). Kept: Ornith default.
+- Token embedding table in host memory (STRATA_Q36_EMBD_CPU=1): logits bitwise identical, 63 instead of 59 slots, but
+  decode slower: 17.1 / 16.9 vs 18.2 / 18.0, and 17.3 at the same 59 slots. Kept opt-in, off.
+- KV cache precision: skipped. Measured the whole KV cost at the launch context: 32K 52 slots 19.8 tok/s, 8K 59 slots
+  20.4 tok/s; fp16 KV would win back at most half of that 3% and touches the attention kernels and session snapshots.
+- Default context: left at 32K for launch (a user choice; it costs 3% decode against 8K, measured above).
