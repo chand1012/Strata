@@ -2091,6 +2091,7 @@ struct Engine {
             mm(L.wo, att, y, T);
         }
         add_rms_post(L, T);
+        predict_next(li, T);
         {   // STRATA_Q36_DUMP_ATTN=F (debug, with --no-graph): the residual after the mixer (llama.cpp's attn_residual-N)
             static FILE* dump = [] { const char* f = std::getenv("STRATA_Q36_DUMP_ATTN"); return f ? std::fopen(f, "wb") : nullptr; }();
             if (dump && !graph_mode) {
@@ -2552,6 +2553,73 @@ struct Engine {
         (void) li; (void) T;
 #endif
     }
+    // ---- STRATA_Q36_PREFETCH=K (decode, with the fetch cache): layer li + 1's router on layer li's residual after its
+    // attention predicts li + 1's experts (79% of its top-8 measured on Ornith); up to K of the predicted ones that are
+    // neither in a slot nor in the cache are copied into the cache while layer li's experts run.  A wrong guess only
+    // costs PCIe time: layer li + 1 routes on its own and finds the right ones in the cache or not.
+    float *pr_h = nullptr, *pr_log = nullptr, *pr_w = nullptr;
+    int32_t *pr_ids = nullptr, *pr_hids = nullptr;
+    cudaEvent_t ev_pred = nullptr;
+    bool pr_on = false;
+    int prefetch_k() const {
+        static const int k = [] { const char* v = std::getenv("STRATA_Q36_PREFETCH"); return v ? std::atoi(v) : 0; }();
+        return k;
+    }
+    void predict_next(size_t li, int T) {
+        pr_on = false;
+        if (prefetch_k() <= 0 || !main_hybrid || li + 1 >= m->layers.size() || T > hybrid_t || !lhy(li + 1) || fetch_off || !fc_valid ||
+            fc_cell == 0)
+            return;
+        const auto& g = m->g;
+        const int N = (int) g.n_embd, ne = (int) g.n_expert, Kp = (int) m->top_k;
+        if (!pr_h) {
+            pr_h = dalloc((size_t) tmax * N);
+            pr_log = dalloc((size_t) tmax * ne);
+            pr_w = dalloc((size_t) tmax * 16);
+            pr_ids = dalloc_t<int32_t>((size_t) tmax * 16);
+            CK(cudaHostAlloc((void**) &pr_hids, (size_t) tmax * 16 * 4, cudaHostAllocDefault));
+            CK(cudaEventCreateWithFlags(&ev_pred, cudaEventDisableTiming));
+        }
+        const Layer& Ln = m->layers[li + 1];
+        k_rms<<<T, kThreads, 0, st>>>(x, Ln.post_norm, pr_h, N, m->eps);
+        f32mm(Ln.router, pr_h, pr_log, N, ne, T);
+        K::native_router_topk(pr_log, pr_ids, pr_w, ne, Kp, T, st);
+        CK(cudaMemcpyAsync(pr_hids, pr_ids, (size_t) T * Kp * 4, cudaMemcpyDeviceToHost, st));
+        CK(cudaEventRecord(ev_pred, st));
+        pr_on = true;
+    }
+    void prefetch_next(size_t li, int T) {
+        if (!pr_on || !fc_valid || fc_cell == 0) return;
+        pr_on = false;
+        CK(cudaEventSynchronize(ev_pred));
+        const int Kp = (int) m->top_k, nl = (int) li + 1;
+        const Layer& L = m->layers[(size_t) nl];
+        const Hy& H = hy[(size_t) nl];
+        std::vector<int> cnt((size_t) m->g.n_expert, 0), want;
+        for (int e = 0; e < T * Kp; ++e) ++cnt[(size_t) pr_hids[e]];
+        for (int x2 = 0; x2 < (int) m->g.n_expert; ++x2)
+            if (cnt[(size_t) x2] > 0 && H.slot_of[(size_t) x2] < 0 && !fc_map.count((int64_t) nl * 4096 + x2)) want.push_back(x2);
+        std::stable_sort(want.begin(), want.end(), [&](int a, int b) { return cnt[(size_t) a] > cnt[(size_t) b]; });
+        if ((int) want.size() > prefetch_k()) want.resize((size_t) prefetch_k());
+        CK(cudaStreamWaitEvent(fst, ev_fdone, 0));
+        for (int x2 : want) {
+            int v = -1;
+            int64_t best = INT64_MAX;
+            for (int c = 0; c < 2 * fc_per; ++c)
+                if (fc_stamp[(size_t) c] < best) { best = fc_stamp[(size_t) c]; v = c; }
+            if (v < 0 || best >= fc_now) break;   // never a cell layer li is using
+            if (fc_key[(size_t) v] >= 0) fc_map.erase(fc_key[(size_t) v]);
+            const int64_t key = (int64_t) nl * 4096 + x2;
+            fc_key[(size_t) v] = key;
+            fc_stamp[(size_t) v] = fc_now;   // (layer li + 1's call stamps it again when it uses it)
+            fc_map[key] = v;
+            CK(cudaMemcpyAsync(fc_ptr(v), L.hblobs + (size_t) x2 * L.stride, L.L.bytes, cudaMemcpyHostToDevice, fst));
+            ++pr_copied;
+        }
+        CK(cudaEventRecord(ev_fcopy, fst));
+    }
+    int64_t pr_copied = 0;
+    std::vector<double> fa_frac;   // STRATA_Q36_FETCH_ADAPT: the fetch share per layer
     // ---- STRATA_Q36_FETCH: missed experts over PCIe (see moe_hybrid_cpu)
     uint8_t* fbuf = nullptr;          // the fetched experts' blobs (kFetchMax x the largest stride)
     uint8_t* ftab_d = nullptr;        // group tables on the device / pinned on the host, two of each (by call parity)
@@ -2572,7 +2640,8 @@ struct Engine {
             if (cnt[(size_t) x] > 0) miss.push_back(x);
         int nf = (int) std::lround(frac * (double) miss.size());
         nf = std::min(nf, kFetchMax);
-        if (nf <= 0) return;
+        static const bool use_cache0 = [] { const char* v = std::getenv("STRATA_Q36_FETCH_CACHE"); return v && v[0] == '1'; }();
+        if (nf <= 0 && !(use_cache0 && !miss.empty())) return;   // (the cache's hits need no copy)
         std::stable_sort(miss.begin(), miss.end(), [&](int a, int b) { return cnt[(size_t) a] > cnt[(size_t) b]; });
         miss.resize((size_t) nf);
         std::sort(miss.begin(), miss.end());
@@ -2723,7 +2792,18 @@ struct Engine {
         // runs the rest - PCIe and the CPU work at once instead of the CPU alone.  Off: as before.
         std::vector<char> fetched((size_t) g.n_expert, 0);
         static const double fetch_frac = [] { const char* v = std::getenv("STRATA_Q36_FETCH"); return v ? std::atof(v) : 0.0; }();
-        if (fetch_frac > 0.0 && !fetch_off) fetch_misses(L, H, T, fetch_frac, fetched);
+        // STRATA_Q36_FETCH_ADAPT=1: the share follows the balance, per layer: when the pool finishes and the layer's copies
+        // are already done, PCIe had room (the share goes up by a step), else the CPU waited for it (down by a step)
+        static const bool adapt = [] { const char* v = std::getenv("STRATA_Q36_FETCH_ADAPT"); return v && v[0] == '1'; }();
+        if (adapt && fa_frac.empty()) fa_frac.assign(hy.size(), fetch_frac);
+        const double frac_now = adapt ? fa_frac[li] : fetch_frac;
+        bool fetched_any = false;
+        if (fetch_frac > 0.0 && !fetch_off) {
+            const int64_t before = hy_fetch + fc_hits;
+            fetch_misses(L, H, T, frac_now, fetched);
+            fetched_any = hy_fetch + fc_hits != before;
+        }
+        prefetch_next(li, T);
         // the missed entries per expert (up to MAXT tokens per job)
         jobs.clear();
         std::vector<char> quantized((size_t) T, 0);
@@ -2763,6 +2843,11 @@ struct Engine {
         if (n_miss == 0) return;
         pool->run_split_multi_native(H.fmt, jobs.data(), (int) jobs.size());
         hy_cpu_ms += ms_since(t0);
+        if (adapt && fetched_any && T <= hybrid_t) {
+            static const double step = [] { const char* v = std::getenv("STRATA_Q36_FETCH_STEP"); return v ? std::atof(v) : 0.02; }();
+            const bool room = cudaEventQuery(ev_fdone) == cudaSuccess;
+            fa_frac[li] = std::min(0.9, std::max(0.1, fa_frac[li] + (room ? step : -step)));
+        }
         CK(cudaMemcpyAsync(ecpu, cpu_out, (size_t) n_ent * N * 4, cudaMemcpyHostToDevice, st));
         CK(cudaMemcpyAsync(d_miss, h_miss, (size_t) n_ent * 4, cudaMemcpyHostToDevice, st));
         k_merge_cpu<<<n_ent, kThreads, 0, st>>>(eparts, ecpu, d_miss, N);
@@ -4388,9 +4473,11 @@ int strata::qwen35::run(int argc, char** argv) {
             env_default("STRATA_Q36_STREAM_CPU", "auto");   // short prompt chunks: part of the missing experts on the CPU
             env_default("STRATA_Q36_STAGE_SPLIT", "1");     // staging for the IQ3_S layers, blk.47 / MTP in parts
             env_default("STRATA_Q36_FETCH_CACHE", "1");     // the staging buffers keep fetched experts during decode
+            env_default("STRATA_Q36_FETCH_ADAPT", "1");     // the fetch share follows the PCIe / CPU balance per layer
+            env_default("STRATA_Q36_FETCH_STEP", "0.005");
             std::fprintf(stderr, "strata-q36: Ornith-1.5 geometry: its measured defaults (STRATA_Q8_PACKED=0, "
                          "STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5, STRATA_Q36_STREAM_CPU=auto, "
-                         "STRATA_Q36_STAGE_SPLIT=1, STRATA_Q36_FETCH_CACHE=1; set any to override)\n");
+                         "STRATA_Q36_STAGE_SPLIT=1, STRATA_Q36_FETCH_CACHE=1, STRATA_Q36_FETCH_ADAPT=1; set any to override)\n");
         }
     }
 #if !defined(_WIN32)
@@ -4473,8 +4560,8 @@ int strata::qwen35::run(int argc, char** argv) {
             if (!E.m->hybrid) return;
             const long long n = E.hy_cpu + E.hy_gpu;
             std::fprintf(stderr, "strata-q36: hybrid experts: %lld of %lld batch entries on the GPU (%.1f%%), %lld on the "
-                         "CPU pool in %.0f ms, %lld slot replacements, %lld experts fetched over PCIe, %lld from the fetch cache\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
-                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps, (long long) E.hy_fetch, (long long) E.fc_hits);
+                         "CPU pool in %.0f ms, %lld slot replacements, %lld experts fetched over PCIe, %lld from the fetch cache, %lld prefetched\n", E.hy_gpu, n, n ? 100.0 * E.hy_gpu / n : 0.0,
+                         E.hy_cpu, E.hy_cpu_ms, E.hy_swaps, (long long) E.hy_fetch, (long long) E.fc_hits, (long long) E.pr_copied);
             // STRATA_Q36_PROFILE_OUT=F: this run's routing counts per layer and expert (f64), added to F when it exists
             // (a profile of several runs), for STRATA_Q36_PROFILE
             if (const char* po = std::getenv("STRATA_Q36_PROFILE_OUT")) {

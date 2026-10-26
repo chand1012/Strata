@@ -100,3 +100,15 @@ Idea 2 (slot placement), teacher-forced 256-token decode on the code prompt (`de
   places the slots. Kept opt-in, off.
 - Per-layer slot counts by traffic: from the same profile, the share of routed entries the slots cover at the same
   total VRAM is 53.9% with 59 slots in every layer and 54.0% with the best per-layer split (48..77 slots). Not built.
+
+Idea 3 (overlap PCIe and CPU in decode), teacher-forced 256-token decode (`dec2.sh`), defaults before = 20.4-20.5:
+- Next-layer prefetch (opt-in STRATA_Q36_PREFETCH=K): layer L+1's router on layer L's post-attention residual predicts
+  79% of L+1's top-8 (offline, from the llama.cpp dumps; 82% from the post-MoE residual, 90% recall with 12
+  guesses). The prefetched experts are used (29,985 copied, 30,647 cache hits) but decode is slower because PCIe is
+  already busy: K=2 15.7, K=4 13.6, K=8 12.4; with less reactive fetch: F=0.4 K=1 20.0, F=0.25 K=2 17.6, F=0.01 K=3
+  16.5. Kept opt-in, off.
+- Adaptive fetch share (STRATA_Q36_FETCH_ADAPT=1): per layer, up a step when its copies were done before the CPU pool
+  finished, down a step otherwise. Step 0.02: 21.4; step 0.005: 21.6; starting from 0.3: 21.5 (fixed 0.5: 20.5).
+  Output changes (which experts run on the GPU): ornith_kl.py mean KL 0.0197 vs floor 0.0381, PASS. Kept: Ornith
+  default, step 0.005.
+| + STRATA_Q36_FETCH_ADAPT=1 | 229.8 | 24.8 | 580.7 | 20.1 | 583.4 | 21.6 | 20.9 (64%) |
