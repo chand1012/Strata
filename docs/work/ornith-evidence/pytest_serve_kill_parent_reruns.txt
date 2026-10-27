@@ -1,0 +1,6 @@
+Strata run 1: 1 passed in 0.96s
+Strata run 2: 1 passed in 0.96s
+Strata run 3: 1 passed in 0.96s
+main-wt run 1: 1 passed in 0.98s
+main-wt run 2: 1 passed in 0.96s
+main-wt run 3: 1 passed in 0.96s

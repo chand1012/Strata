@@ -29,3 +29,13 @@ Logits: `tools/qwen35/ornith_kl.py`: Strata mean KL 0.0252, llama.cpp floor 0.03
   (`pytest_failures_main.txt`, `pytest_failures_branch_final.txt`). New: `test_launch_ornith.py` (7 tests, pass).
 - ctest (CUDA build, non-GPU tests): main fails 4 (expert_cache_segmented_test, ple_parity, ggml_tq_overlay,
   isa_guard_check), the branch fails 3 of those (`ctest_main.txt`, `ctest_branch.txt`).
+
+## Round 2 (speed) checks, 2026-10-26
+- ornith_kl.py with the final defaults: mean KL 0.0256 vs floor 0.0381 (0.67x), PASS (`ornith_kl_round2.txt`).
+- Qwen3.8-Flash-Next IQ2_XS, main build vs branch build, default and --expert-cache 4: identical output tokens in all
+  four runs; decode 54.24 vs 53.26 and 13.60 vs 13.36 tok/s (`qwen38_main_vs_branch_round2.txt`).
+- pytest tests/terminal: 29 failed / 1645 passed. 28 are main's (identical list); the 29th,
+  test_lifecycle_matrix::test_serve_kill_parent, passed 3 of 3 reruns on this branch and on main
+  (`pytest_serve_kill_parent_reruns.txt`), and no file it covers changed in this round: a flaky timing test.
+- ctest (non-GPU): branch fails expert_cache_segmented_test, ple_parity, ggml_tq_overlay, isa_guard_check: the same 4
+  as main (`ctest_branch_round2.txt`, `ctest_main.txt`).

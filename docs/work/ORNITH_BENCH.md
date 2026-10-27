@@ -152,3 +152,25 @@ Idea 6 (prompt chunk 4096, STRATA_Q36_CHUNK=4096): pp4096 998.5 (default 2048-ro
 buffers leave 51 instead of 59 expert slots per layer: pp512 215.7 (223.8), tg128 22.3 / 20.4 (25.0 / 21.0), chat 20.4,
 --mtp 1 23.1, teacher-forced decode 20.0 (23.6). Chat decode matters more for the default use, so the default stays
 2048; long-prompt users can set STRATA_Q36_CHUNK=4096.
+
+### Round 2 result: baseline vs final defaults (same machine, same day, same commands)
+| test | round-2 baseline (d91b6ac0) | final defaults | change |
+|---|---|---|---|
+| pp512 | 226.3 | 223.6 | -1% (noise: 213-234 across runs) |
+| tg128 after pp512 | 19.4 | 24.8 | +28% |
+| pp2048 | 569.3 | 578.0 | +2% |
+| tg128 after pp2048 | 15.8 | 21.6 | +37% |
+| pp4096 (default chunk) | 573.8 | 583.2 | +2% (998.5 with STRATA_Q36_CHUNK=4096) |
+| chat 256 tokens | 17.3 | 21.4 | +24% |
+| chat 256 tokens, --mtp 1 | 19.4 (82%) | 23.1 (75%) | +19% |
+| teacher-forced 256 tokens (`dec2.sh`) | 18.2 | 23.6 | +30% |
+Against llama.cpp's best tuned config from round 1: tg128 14.45 -> Strata 21.6-24.8; llama-server chat 14.1 ->
+Strata 21.4 (23.1 with --mtp 1); pp2048 532.8 -> 578.0.
+Commands: `~/work/fullbench.sh` = `strata-q36 --model <shard1> --max-context 8192 --bench-pp {512,2048,4096}
+--bench-tg {128,128,0}` (3rd of 3 runs) and `strata-q36 ... --tokens <code prompt> --n 256 [--mtp 1]`.
+Ornith defaults now on (engine, from the geometry): STRATA_Q8_PACKED=0, STRATA_Q36_STREAM_RUNS=1, STRATA_Q36_FETCH=0.5,
+STRATA_Q36_STREAM_CPU=auto, STRATA_Q36_STAGE_SPLIT=1 (new), STRATA_Q36_FETCH_CACHE=1 (new), STRATA_Q36_FETCH_ADAPT=1
+(new, step 0.005), STRATA_IQ_MT_MIN=1 (new). Opt-in, off: STRATA_Q36_EMBD_CPU, STRATA_Q36_PROFILE, STRATA_Q36_PREFETCH,
+STRATA_Q36_NGRAM, --draft-vocab, STRATA_Q36_CHUNK=4096.
+Suggestion only (needs root): the CPU governor is `powersave`; `performance` may cut run-to-run noise. Not measured.
+Follow-ups: a lossless AVX2-friendly IQ3_S layout (the CPU kernel is compute-bound at ~24 GB/s against 35 GB/s RAM).

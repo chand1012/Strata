@@ -1,0 +1,4 @@
+fr: strata KL 0.0082 top1 100.0% | floor KL 0.0065 top1 100.0%
+code: strata KL 0.0368 top1 95.3% | floor KL 0.0327 top1 93.8%
+story: strata KL 0.0318 top1 95.3% | floor KL 0.0752 top1 95.3%
+mean KL: strata 0.0256, floor 0.0381 (0.67x): PASS (gate 1.5x)
