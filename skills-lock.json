@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "easyread": {
+      "source": "chand1012/skills",
+      "sourceType": "github",
+      "skillPath": "skills/easyread/SKILL.md",
+      "computedHash": "12f1f500efa541cd605b7c8243535b006bc7028ef48e85336013a5672d747dd6"
+    }
+  }
+}
