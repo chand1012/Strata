@@ -1602,7 +1602,35 @@ struct Engine {
     }
 
     /// The recurrent state and the cache to a fresh sequence.
+    // STRATA_Q36_NGRAM=K (opt-in, with --mtp): prompt-lookup drafts.  When the last STRATA_Q36_NGRAM_N (default 3) tokens
+    // ending with the token being decoded occurred before in this context (prompt and answer), up to K tokens that
+    // followed them are the drafts of the step instead of the MTP block's chain.  A draft only proposes; the verify
+    // window decides, so the greedy answer is the same.
+    std::vector<int32_t> ng_hist;
+    int64_t ng_steps = 0, ng_offered = 0, ng_accepted = 0;
+    static int ngram_k() {
+        static const int k = [] { const char* v = std::getenv("STRATA_Q36_NGRAM"); return v ? std::max(0, std::min(kVerify - 1, std::atoi(v))) : 0; }();
+        return k;
+    }
+    /// The prompt-lookup drafts after the history plus x_tok (empty: no match).
+    std::vector<int32_t> ngram_drafts(int x_tok, int maxd) const {
+        static const int n = [] { const char* v = std::getenv("STRATA_Q36_NGRAM_N"); return v ? std::max(1, std::atoi(v)) : 3; }();
+        std::vector<int32_t> out;
+        const int64_t H = (int64_t) ng_hist.size();
+        if (maxd <= 0 || H < n) return out;
+        auto at = [&](int64_t i) { return i == H ? x_tok : ng_hist[(size_t) i]; };   // the history with x_tok appended
+        // the key: positions H - n + 1 .. H; a match ends at j < H (most recent first, within the last 8192 tokens)
+        for (int64_t j = H - 1; j >= std::max<int64_t>(n - 1, H - 8192); --j) {
+            bool ok = true;
+            for (int i = 0; i < n && ok; ++i) ok = at(j - i) == at(H - i);
+            if (!ok) continue;
+            for (int64_t c = j + 1; c <= H && (int) out.size() < maxd; ++c) out.push_back(at(c));
+            if (!out.empty()) return out;
+        }
+        return out;
+    }
     void reset() {
+        ng_hist.clear();
         const auto& g = m->g;
         for (size_t l = 0; l < conv.size(); ++l) {
             if (conv[l]) CK(cudaMemsetAsync(conv[l], 0, (size_t) g.ssm_conv_channels * (g.ssm_d_conv - 1) * 4, st));
@@ -2305,6 +2333,18 @@ struct Engine {
         const int N = (int) g.n_embd;
         const Mat& hd = m->head;
         if (!fast_k || draft_n <= 0 || draft_n >= g.n_vocab || draft_n % 8 != 0 || hd.type != 8 || hd.n_in != N || N / 32 != 64) {
+            // any other geometry (Ornith: n_embd 3072) with no packed copy of the head: the first draft_n rows of the
+            // output matrix as a matrix of their own (rows are contiguous), the generic product
+            bool packed_head = false;
+            for (const auto& p : m->packed) packed_head = packed_head || std::get<0>(p) == hd.d;
+            if (draft_n > 0 && draft_n < g.n_vocab && draft_n % 8 == 0 && !packed_head) {
+                Mat sub = hd;
+                sub.n_out = draft_n;
+                mm(sub, hn, logits_m, 1);
+                k_argmax<<<dim3(kArgBlocks, 1), kThreads, 0, st>>>(logits_m, draft_n, pick_m, amv, ami, false);
+                k_argmax<<<dim3(1, 1), kThreads, 0, st>>>(logits_m, kArgBlocks, pick_m, amv, ami, true);
+                return;
+            }
             head_rows(hn, 1, logits_m, pick_m);
             return;
         }
@@ -2996,6 +3036,7 @@ struct Engine {
     /// after every chunk; false ends the read there (a cancelled request): the tokens processed are returned.
     template <class F> int64_t process(const int32_t* toks, int64_t n, F on_chunk_) {
         const int N = (int) m->g.n_embd;
+        if (ngram_k() > 0 && !warming) ng_hist.insert(ng_hist.end(), toks, toks + n);
         auto on_chunk = [&](int64_t done) -> bool {   // a callback returning void never cancels
             if constexpr (std::is_void_v<decltype(on_chunk_(done))>) {
                 on_chunk_(done);
@@ -3255,7 +3296,13 @@ struct Engine {
     int spec_step(int x_tok, const std::vector<int32_t>& fix, int D, std::vector<int32_t>& drafts, int32_t* picks,
                   const std::atomic<bool>* cancel = nullptr) {
         const int N = (int) m->g.n_embd;
+        std::vector<int32_t> ngd;
+        if (ngram_k() > 0 && !warming) {
+            const int cap = main_hybrid ? (int) (kRebalanceEvery - pos % kRebalanceEvery) - 1 : ngram_k();
+            ngd = ngram_drafts(x_tok, std::min(ngram_k(), cap));
+        }
         if (main_hybrid) D = std::min<int>(D, (int) (kRebalanceEvery - pos % kRebalanceEvery) - 1);
+        if (!ngd.empty()) D = (int) ngd.size();
         const int T0 = (int) fix.size() + 1;   // the redo rows and the row of x
         CK(cudaStreamSynchronize(st));
         // rows of the first MTP call: (hmain row i, fix[i]) at positions pos - fix.size() + i, then (hlast, x) at pos
@@ -3269,15 +3316,19 @@ struct Engine {
         if (!fix.empty())
             CK(cudaMemcpyAsync(seeds, hmain, fix.size() * (size_t) N * 4, cudaMemcpyDeviceToDevice, st));
         CK(cudaMemcpyAsync(seeds + fix.size() * (size_t) N, hlast, (size_t) N * 4, cudaMemcpyDeviceToDevice, st));
-        forward_mtp(T0, pos - (int64_t) fix.size(), seeds, D > 0, false);
+        forward_mtp(T0, pos - (int64_t) fix.size(), seeds, D > 0 && ngd.empty(), false);   // (its KV / state either way)
         drafts.assign((size_t) D, 0);
-        if (D > 0) {
+        if (!ngd.empty()) {
+            drafts = ngd;
+            ++ng_steps;
+            ng_offered += D;
+        } else if (D > 0) {
             CK(cudaMemcpyAsync(hpin + 2, pick_m, 4, cudaMemcpyDeviceToHost, st));
             CK(cudaStreamSynchronize(st));
             drafts[0] = hpin[2];
         }
         int last_row = T0 - 1;   // the row of the previous MTP call whose output seeds the next draft
-        for (int d = 1; d < D; ++d) {   // chained: (the block's own output, the last draft) at the next position
+        for (int d = 1; d < D && ngd.empty(); ++d) {   // chained: (the block's own output, the last draft) at the next position
             hpin[0] = drafts[(size_t) d - 1];
             hpin[1] = (int32_t) (pos + d);
             put_tok(1, hpin, 1);
@@ -3310,6 +3361,11 @@ struct Engine {
         CK(cudaMemcpyAsync(hlast, hmain + (size_t) a * N, (size_t) N * 4, cudaMemcpyDeviceToDevice, st));
         pos += a + 1;
         after_rows(a + 1);
+        if (ngram_k() > 0 && !warming) {
+            ng_hist.push_back(x_tok);
+            ng_hist.insert(ng_hist.end(), drafts.begin(), drafts.begin() + a);
+            if (!ngd.empty()) ng_accepted += a;
+        }
         return a;
     }
 
@@ -4390,6 +4446,7 @@ int serve(Engine& E) {
 
 }  // namespace
 
+static bool ngram_k_on() { const char* v = std::getenv("STRATA_Q36_NGRAM"); return v && std::atoi(v) > 0; }
 int strata::qwen35::run(int argc, char** argv) {
     std::string model, tokens, force, dump_full, emb_file;
     int ctx = 32768, chunk = 0, n_gen = 64, bench_pp = 0, bench_tg = 0, mtp_d = 0, cpu_threads = 0, hybrid_rows = 128;
@@ -4658,6 +4715,8 @@ int strata::qwen35::run(int argc, char** argv) {
                      "%lld of %lld accepted (%.0f%%)\n", prompt.size(), pp_ms, gen.size(), ms_since(t1),
                      gen.size() / (ms_since(t1) / 1000.0), E.mtp_d, accepted, offered,
                      offered ? 100.0 * accepted / offered : 0.0);
+        if (ngram_k_on()) std::fprintf(stderr, "strata-q36: n-gram drafts: %lld steps, %lld of %lld accepted\n", (long long) E.ng_steps,
+                                     (long long) E.ng_accepted, (long long) E.ng_offered);
         return 0;
     }
     for (int i = 0; i < n_gen; ++i) {

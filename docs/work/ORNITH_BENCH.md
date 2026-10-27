@@ -131,3 +131,19 @@ decodes IQ3_S at ~2.9 GB/s, so the kernel is compute-bound, with at most ~1.5x l
 - A new lossless IQ3_S layout: not built. The kernel is compute-bound on the grid lookups (above); a new layout and
   its parity tests are a larger project than this round. Noted as a follow-up.
 | + STRATA_IQ_MT_MIN=1 | 223.8 | 25.0 | 581.1 | 21.0 | 582.3 | 21.4 (21.6 / 21.7 paired) | 22.8 (73%) |
+
+Idea 5 (drafting), free 256-token decode with --mtp 1 (the setup default):
+- Subset-vocabulary MTP draft head (`--draft-vocab N` / STRATA_Q36_DRAFT_VOCAB): it only had a fast path for
+  n_embd 2048 with packed Q8_0; added a generic path (the first N rows of the output matrix as their own matrix) for
+  other geometries. 4 alternating pairs on the code prompt: 0 (whole vocabulary) mean 23.52, 65536 mean 23.18; two
+  earlier single pairs 24.4 / 25.7 and 22.9 / 23.8; 131072: 25.7, 22.3. No measurable gain. Kept opt-in, off.
+- Prompt-lookup (n-gram) drafts (new opt-in STRATA_Q36_NGRAM=K, STRATA_Q36_NGRAM_N=n): when the last n tokens
+  occurred earlier in the context, the K tokens after them are the drafts instead of the MTP chain. 4 runs each:
+  code prompt 23.48 without, 22.45 with K=3 n=3; 1228-token summary prompt 24.98 without, 25.98 with (+4%).
+  K=4 n=4 single runs: code 24.0, summary 23.6. Wider verify windows send more experts to the CPU, which eats the
+  gain except on text that copies from its context. Kept opt-in, off.
+- Greedy output: with fixed slots and no PCIe fetch (deterministic expert placement), plain decode, --mtp 1,
+  --mtp 1 --draft-vocab 32768 and --mtp 1 with STRATA_Q36_NGRAM=3 give the same 128 tokens (same md5). With the
+  default dynamic placement (PCIe fetch), plain and MTP decoding already differed before this round (round-1
+  settings: first difference at token 120; now at token 10), because which experts run on the GPU and which on the
+  CPU depends on the batch shape. The quality gate for that is ornith_kl.py (PASS above).
