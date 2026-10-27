@@ -147,3 +147,8 @@ Idea 5 (drafting), free 256-token decode with --mtp 1 (the setup default):
   default dynamic placement (PCIe fetch), plain and MTP decoding already differed before this round (round-1
   settings: first difference at token 120; now at token 10), because which experts run on the GPU and which on the
   CPU depends on the batch shape. The quality gate for that is ornith_kl.py (PASS above).
+
+Idea 6 (prompt chunk 4096, STRATA_Q36_CHUNK=4096): pp4096 998.5 (default 2048-row chunk: 582.3), but the chunk's
+buffers leave 51 instead of 59 expert slots per layer: pp512 215.7 (223.8), tg128 22.3 / 20.4 (25.0 / 21.0), chat 20.4,
+--mtp 1 23.1, teacher-forced decode 20.0 (23.6). Chat decode matters more for the default use, so the default stays
+2048; long-prompt users can set STRATA_Q36_CHUNK=4096.
